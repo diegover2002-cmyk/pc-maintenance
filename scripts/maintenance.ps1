@@ -1,7 +1,7 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    PC Maintenance v2.0 - Plan & Apply workflow
+    PC Maintenance v3.0 - Plan & Apply workflow
 
 .DESCRIPTION
     Inspired by HashiCorp Terraform:
@@ -14,21 +14,31 @@
       Startup      - Classify and disable non-essential startup programs
       File Analysis- Desktop clutter, Downloads age/size, duplicate detection
       Disk         - Space check, SSD TRIM
+      Documents    - File audit, semantic classification, content analysis
       Drivers      - Device error detection
       Backup       - Backup reminder check
+      Network      - Active adapters, DNS ping, latency check
+      Temperature  - CPU thermal zones via ACPI
+      Processes    - Top 5 by CPU and RAM, high-memory warnings
 
 .PARAMETER Mode
     Plan  (default) - Show what WOULD be done. Safe, no changes made.
     Apply           - Execute all AUTO-fixable actions.
 
+.PARAMETER Interactive
+    Show a module-selection menu before running. Choose which modules to execute.
+
 .EXAMPLE
     .\maintenance.ps1
     .\maintenance.ps1 -Mode Apply
+    .\maintenance.ps1 -Interactive
+    .\maintenance.ps1 -Interactive -Mode Apply
 #>
 
 param(
     [ValidateSet("Plan","Apply")]
-    [string]$Mode = "Plan"
+    [string]$Mode = "Plan",
+    [switch]$Interactive
 )
 
 Set-StrictMode -Off
@@ -626,6 +636,436 @@ function Collect-DiskActions {
 }
 
 # ============================================================
+#  MODULE: DOCUMENTS AUDIT
+# ============================================================
+function Collect-DocumentsActions {
+    Show-Section "DOCUMENTS AUDIT"
+
+    $userRoot  = $env:USERPROFILE
+    $scanDirs  = @(
+        @{ P="$userRoot\Documents"; L="Documents" }
+        @{ P="$userRoot\Desktop";   L="Desktop"   }
+        @{ P="$userRoot\Downloads"; L="Downloads"  }
+        @{ P="$userRoot\Pictures";  L="Pictures"   }
+        @{ P="$userRoot\Videos";    L="Videos"     }
+        @{ P="$userRoot\Music";     L="Music"      }
+    )
+
+    # Extension categories
+    $catMap = @{
+        Documents = @(".pdf",".doc",".docx",".xls",".xlsx",".ppt",".pptx",".odt",".ods",".odp",".txt",".rtf",".csv",".md")
+        Images    = @(".jpg",".jpeg",".png",".gif",".bmp",".tiff",".webp",".svg",".heic",".raw",".cr2",".nef")
+        Videos    = @(".mp4",".mkv",".avi",".mov",".wmv",".flv",".webm",".m4v",".ts")
+        Audio     = @(".mp3",".flac",".wav",".aac",".ogg",".m4a",".wma")
+        Archives  = @(".zip",".rar",".7z",".tar",".gz",".bz2",".iso",".img")
+        Executables = @(".exe",".msi",".bat",".ps1",".cmd",".vbs",".jar")
+        Code      = @(".py",".js",".ts",".cs",".cpp",".c",".h",".java",".go",".rs",".php",".html",".css",".json",".xml",".yml",".yaml",".sql")
+    }
+
+    # Sensitive filename patterns (flag for review, never read contents)
+    $sensitivePatterns = @(
+        "*password*","*contrase*","*clave*","*passwd*","*secret*","*credential*",
+        "*private*key*","*id_rsa*","*token*","*api_key*","*backup_code*",
+        "*wallet*","*seed*phrase*","*recovery*code*","*2fa*"
+    )
+
+    $grandTotal    = 0L
+    $grandCount    = 0
+    $allSensitive  = @()
+    $allOrphaned   = @()
+    $allOldLarge   = @()
+
+    foreach ($dir in $scanDirs) {
+        if (-not (Test-Path $dir.P)) { continue }
+
+        $files = @(Get-ChildItem $dir.P -File -Recurse -ErrorAction SilentlyContinue)
+        if ($files.Count -eq 0) {
+            Write-PlanLine "$($dir.L): empty" "KEEP"
+            continue
+        }
+
+        $totalBytes = [long]($files | Measure-Object -Property Length -Sum).Sum
+        $grandTotal += $totalBytes
+        $grandCount += $files.Count
+
+        Write-PlanLine "$($dir.L): $($files.Count) files, $(Format-Bytes $totalBytes)" "INFO"
+
+        # --- Category breakdown ---
+        $counts = @{}
+        $sizes  = @{}
+        foreach ($f in $files) {
+            $ext = $f.Extension.ToLower()
+            $matched = $false
+            foreach ($cat in $catMap.Keys) {
+                if ($catMap[$cat] -contains $ext) {
+                    $counts[$cat] = ($counts[$cat] -as [int]) + 1
+                    $sizes[$cat]  = ($sizes[$cat]  -as [long]) + $f.Length
+                    $matched = $true
+                    break
+                }
+            }
+            if (-not $matched) {
+                $counts["Other"] = ($counts["Other"] -as [int]) + 1
+                $sizes["Other"]  = ($sizes["Other"]  -as [long]) + $f.Length
+            }
+        }
+        foreach ($cat in ($counts.Keys | Sort-Object)) {
+            if ($counts[$cat] -gt 0) {
+                $catLabel = $cat
+                Write-PlanLine "  ${catLabel}: $($counts[$cat]) files ($(Format-Bytes $sizes[$cat]))" "INFO"
+            }
+        }
+
+        # --- Executables in user folders (security flag) ---
+        $exes = @($files | Where-Object { $_.Extension -in @(".exe",".msi",".bat",".cmd",".vbs") })
+        if ($exes.Count -gt 0) {
+            Write-PlanLine "  $($exes.Count) executable(s) found in $($dir.L) - review recommended" "WARN"
+            $exes | Select-Object -First 5 | ForEach-Object {
+                Write-PlanLine "    $($_.Name) ($(Format-Bytes $_.Length))" "INFO"
+            }
+            if ($exes.Count -gt 5) { Write-PlanLine "    ... and $($exes.Count - 5) more" "INFO" }
+            Register-Action "Documents" "MANUAL" "Review executables in $($dir.L)" `
+                -Detail "$($exes.Count) .exe/.msi/.bat files - move to a dedicated folder or delete installers"
+        }
+
+        # --- Sensitive filename detection ---
+        $sensitive = @($files | Where-Object {
+            $name = $_.Name.ToLower()
+            $hit  = $false
+            foreach ($pat in $sensitivePatterns) { if ($name -like $pat) { $hit = $true; break } }
+            $hit
+        })
+        if ($sensitive.Count -gt 0) {
+            Write-PlanLine "  $($sensitive.Count) file(s) with sensitive-sounding names in $($dir.L)" "WARN"
+            $sensitive | ForEach-Object {
+                Write-PlanLine "    $($_.Name)" "WARN"
+            }
+            $allSensitive += $sensitive
+        }
+
+        # --- Old + large files (not accessed in 180 days, > 100 MB) ---
+        $cutoff  = (Get-Date).AddDays(-180)
+        $oldLarge = @($files | Where-Object { $_.LastWriteTime -lt $cutoff -and $_.Length -gt 100MB } | Sort-Object Length -Descending)
+        if ($oldLarge.Count -gt 0) {
+            $olBytes = [long]($oldLarge | Measure-Object -Property Length -Sum).Sum
+            Write-PlanLine "  $($oldLarge.Count) large file(s) not modified in 6+ months ($(Format-Bytes $olBytes)):" "WARN"
+            $oldLarge | Select-Object -First 3 | ForEach-Object {
+                $age = [math]::Round(((Get-Date) - $_.LastWriteTime).TotalDays / 30, 0)
+                Write-PlanLine "    $(Format-Bytes $_.Length)  $($_.Name)  [~$age months old]" "INFO"
+            }
+            if ($oldLarge.Count -gt 3) { Write-PlanLine "    ... and $($oldLarge.Count - 3) more" "INFO" }
+            $allOldLarge += $oldLarge
+        }
+
+        # --- Empty subfolders ---
+        $emptyFolders = @(Get-ChildItem $dir.P -Directory -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { @(Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue).Count -eq 0 })
+        if ($emptyFolders.Count -gt 0) {
+            Write-PlanLine "  $($emptyFolders.Count) empty subfolder(s) in $($dir.L)" "DEL"
+            $foldersToDelete = $emptyFolders
+            Register-Action "Documents" "AUTO" "Delete $($emptyFolders.Count) empty folder(s) in $($dir.L)" `
+                -Run { $foldersToDelete | ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue } }.GetNewClosure()
+        }
+    }
+
+    # --- Semantic document classification ---
+    # Scans filenames to identify what kind of personal documents the user has
+    $semanticDirs = @("$userRoot\Documents", "$userRoot\Desktop", "$userRoot\Downloads")
+    $docExtensions = @(".pdf",".doc",".docx",".xls",".xlsx",".jpg",".jpeg",".png",".txt",".rtf",".csv",".odt",".heic")
+
+    $semanticCategories = [ordered]@{
+        "Identidad"       = @("*dni*","*pasaporte*","*passport*","*nie*","*nif*","*carnet*","*id_card*","*cedula*","*identidad*","*documento_nacional*")
+        "Certificados"    = @("*certificado*","*certificate*","*diploma*","*titulo*","*titulo_*","*acreditacion*","*homologacion*","*titulo_universitario*","*grado*","*master*","*formacion*","*curso*","*credencial*")
+        "Laboral"         = @("*nomina*","*nominas*","*contrato*","*contrato_trabajo*","*alta_laboral*","*baja_laboral*","*finiquito*","*irpf*","*antiguedad*","*vida_laboral*","*cv*","*curriculum*","*resume*")
+        "Fiscal/Hacienda" = @("*renta*","*declaracion*","*hacienda*","*irpf*","*aeat*","*modelo_*","*borrador*","*liquidacion*","*tributaria*","*iva*","*autonomo*")
+        "Bancario"        = @("*extracto*","*banco*","*transferencia*","*hipoteca*","*prestamo*","*credito*","*iban*","*cuenta_*","*tarjeta*","*movimientos*","*banking*")
+        "Facturas/Recibos"= @("*factura*","*invoice*","*recibo*","*ticket*","*albaran*","*presupuesto*","*pago*","*receipt*","*compra*")
+        "Seguros"         = @("*seguro*","*poliza*","*insurance*","*cobertura*","*siniestro*","*mutua*","*aseguradora*")
+        "Medico/Salud"    = @("*medico*","*hospital*","*receta*","*analitica*","*informe_medico*","*clinica*","*sanitario*","*vacuna*","*historial*","*diagnostico*","*farmacia*")
+        "Propiedad"       = @("*escritura*","*catastro*","*registro*","*contrato_alquiler*","*arrendamiento*","*inmueble*","*vivienda*","*vehiculo*","*matricula*","*itv*","*permiso_circulacion*")
+        "Educacion"       = @("*expediente*","*matricula*","*beca*","*notas*","*calificaciones*","*universidad*","*colegio*","*instituto*","*tfg*","*tfm*","*tesis*")
+        "Fotografias"     = @("*foto*","*photo*","*photo_*","*img_*","*dsc_*","*picture*","*selfie*","*camara*","*screenshot*","*captura*")
+        "Instaladores"    = @("*.exe","*.msi","*setup*","*installer*","*install_*","*_setup*")
+    }
+
+    Show-Section "DOCUMENTS AUDIT - SEMANTIC CLASSIFICATION"
+    Write-PlanLine "Scanning filenames to identify document types..." "INFO"
+    Write-PlanLine "(Analysis by filename - file contents are never read)" "INFO"
+    Write-PlanLine "" "INFO"
+
+    $semanticResults = @{}
+    $semanticSamples = @{}
+    $allDocFiles = @()
+
+    foreach ($sDir in $semanticDirs) {
+        if (Test-Path $sDir) {
+            $allDocFiles += @(Get-ChildItem $sDir -File -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $docExtensions -contains $_.Extension.ToLower() })
+        }
+    }
+
+    foreach ($catName in $semanticCategories.Keys) {
+        $patterns = $semanticCategories[$catName]
+        $matched  = @($allDocFiles | Where-Object {
+            $n = $_.BaseName.ToLower() -replace '[_\-\s\.]+', '_'
+            $hit = $false
+            foreach ($p in $patterns) {
+                if ($n -like $p.ToLower() -or $_.Name.ToLower() -like $p.ToLower()) { $hit = $true; break }
+            }
+            $hit
+        })
+        if ($matched.Count -gt 0) {
+            $semanticResults[$catName] = $matched   # store all files, not just count
+            $semanticSamples[$catName] = $matched | Sort-Object LastWriteTime -Descending | Select-Object -First 4
+        }
+    }
+
+    if ($semanticResults.Count -eq 0) {
+        Write-PlanLine "No documents matched known semantic categories" "INFO"
+    } else {
+        foreach ($catName in $semanticResults.Keys) {
+            $count   = $semanticResults[$catName].Count
+            $samples = $semanticSamples[$catName]
+            $newest  = ($samples | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+            $newestStr = if ($newest) { $newest.ToString("yyyy-MM-dd") } else { "?" }
+            Write-PlanLine "$catName - $count file(s)  [newest: $newestStr]" "ADD"
+            foreach ($s in $samples) {
+                $loc = $s.DirectoryName -replace [regex]::Escape($userRoot), "~"
+                Write-PlanLine "    $($s.Name)  [$loc]" "INFO"
+            }
+            if ($count -gt 4) { Write-PlanLine "    ... and $($count - 4) more" "INFO" }
+        }
+
+        # --- AUTO: create folder structure and move personal document files ---
+        # Only move actual document files (not images/game assets) from Desktop or Downloads
+        $moveableExts    = @(".pdf",".doc",".docx",".xls",".xlsx",".odt",".ods",".rtf",".csv")
+        $gamePathMarkers = @("\My Games\","\ANIL ","\Pokemon ","\HoI4\","\Hearts of Iron","\Farming Simulator","\iRacing\","\steamapps\","\Assetto Corsa\","\BeamNG\")
+        $catToFolder     = @{
+            "Identidad"        = "Identidad"
+            "Certificados"     = "Certificados"
+            "Laboral"          = "Laboral"
+            "Fiscal/Hacienda"  = "Fiscal"
+            "Bancario"         = "Bancario"
+            "Facturas/Recibos" = "Facturas"
+            "Seguros"          = "Seguros"
+            "Medico/Salud"     = "Medico"
+            "Propiedad"        = "Propiedad"
+            "Educacion"        = "Educacion"
+        }
+
+        $filesToMove = @()   # list of @{File; Dest}
+        foreach ($catName in $catToFolder.Keys) {
+            if (-not $semanticResults.ContainsKey($catName)) { continue }
+            $folderName = $catToFolder[$catName]
+            $destFolder = "$userRoot\Documents\$folderName"
+            foreach ($f in $semanticResults[$catName]) {
+                if ($moveableExts -notcontains $f.Extension.ToLower()) { continue }
+                $isGame = $false
+                foreach ($marker in $gamePathMarkers) { if ($f.FullName -like "*$marker*") { $isGame = $true; break } }
+                if ($isGame) { continue }
+                if ($f.DirectoryName -eq $destFolder) { continue }  # already in right place
+                $filesToMove += @{ File=$f; Dest=$destFolder; Cat=$catName }
+            }
+        }
+
+        if ($filesToMove.Count -gt 0) {
+            Write-PlanLine "" "INFO"
+            Write-PlanLine "Will organize $($filesToMove.Count) personal document(s) into Documents subfolders:" "ADD"
+            foreach ($m in $filesToMove) {
+                $src = $m.File.DirectoryName -replace [regex]::Escape($userRoot), "~"
+                Write-PlanLine "  [$($m.Cat)]  $($m.File.Name)" "ADD"
+                Write-PlanLine "    from: $src" "INFO"
+                Write-PlanLine "    to:   ~\Documents\$($catToFolder[$m.Cat])\" "INFO"
+            }
+            $moveList = $filesToMove
+            Register-Action "Documents" "AUTO" "Organize $($filesToMove.Count) personal document(s) into subfolders" `
+                -Detail "Creates category subfolders in Documents and moves files from Desktop/Downloads" `
+                -Run {
+                    foreach ($m in $moveList) {
+                        $dest = $m.Dest
+                        if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
+                        $destFile = Join-Path $dest $m.File.Name
+                        # Avoid overwriting: append timestamp if file already exists at dest
+                        if (Test-Path $destFile) {
+                            $stamp    = Get-Date -Format "yyyyMMdd_HHmmss"
+                            $destFile = Join-Path $dest "$($m.File.BaseName)_$stamp$($m.File.Extension)"
+                        }
+                        Move-Item -Path $m.File.FullName -Destination $destFile -ErrorAction SilentlyContinue
+                    }
+                }.GetNewClosure()
+        } else {
+            Write-PlanLine "" "INFO"
+            Write-PlanLine "All identified personal documents already in correct subfolders" "KEEP"
+        }
+
+        # Flag installers found among documents
+        if ($semanticResults.ContainsKey("Instaladores")) {
+            $instCount = $semanticResults["Instaladores"].Count
+            Register-Action "Documents" "MANUAL" "Remove $instCount installer(s) mixed with documents" `
+                -Detail "Executable installer files (.exe/.msi) found among personal documents - move to Downloads or delete after installation"
+        }
+    }
+
+    # --- Global summary ---
+    Write-PlanLine "" "INFO"
+    Write-PlanLine "Total across all user folders: $grandCount files, $(Format-Bytes $grandTotal)" "INFO"
+
+    # --- Sensitive files global action ---
+    if ($allSensitive.Count -gt 0) {
+        Register-Action "Documents" "MANUAL" "Secure $($allSensitive.Count) sensitive-named file(s)" `
+            -Detail "Files with names like 'password', 'clave', 'token', etc. - move to encrypted vault (KeePass, BitLocker) or delete if no longer needed"
+    }
+
+    # --- Old large files global action ---
+    if ($allOldLarge.Count -gt 0) {
+        $olTotalBytes = [long]($allOldLarge | Measure-Object -Property Length -Sum).Sum
+        Register-Action "Documents" "MANUAL" "Review $($allOldLarge.Count) large old file(s) ($(Format-Bytes $olTotalBytes))" `
+            -Detail "Files over 100 MB not modified in 6+ months - archive to external drive or delete"
+    }
+
+    # --- Content-based document classification ---
+    Show-Section "DOCUMENTS AUDIT - CONTENT ANALYSIS"
+    Write-PlanLine "Reading document contents to classify accurately..." "INFO"
+    Write-PlanLine "(Scans text inside files - images are skipped)" "INFO"
+    Write-PlanLine "" "INFO"
+
+    $contentScanDirs = @("$userRoot\Documents", "$userRoot\Desktop", "$userRoot\Downloads")
+    $contentExts     = @(".pdf",".txt",".md",".csv",".docx",".xlsx",".doc",".rtf",".odt")
+    $maxFileSizeBytes = 8MB
+
+    # Folder path fragments to exclude (games, mods, dev tools, etc.)
+    $contentExcludePaths = @(
+        "\My Games\", "\AppData\", "\node_modules\", "\steamapps\",
+        "\Hearts of Iron IV\", "\HoI4\", "\ANIL V3.52\", "\Pokemon ",
+        "\Farming Simulator", "\iRacing\", "\Assetto Corsa\", "\BeamNG\",
+        "\.git\", "\vendor\", "\dist\", "\build\", "\__pycache__\",
+        "\Common Redist\", "\Redist\", "\DirectX\", "\VC_redist"
+    )
+
+    # Content keyword categories (Spanish + English)
+    $contentCats = [ordered]@{
+        "Identidad/DNI"   = @("dni","nie","nif","pasaporte","passport","documento nacional","numero de identidad","identity card","\d{8}[A-Za-z]","[XYZxyz]\d{7}[A-Za-z]")
+        "Nominas/Laboral" = @("nomina","nómina","salario bruto","salario neto","finiquito","contrato de trabajo","alta en seguridad social","baja voluntaria","trabajador","empleado","empresa","convenio colectivo","pagas extras","retribucion","remuneracion")
+        "Fiscal/AEAT"     = @("aeat","agencia tributaria","declaracion de la renta","irpf","modelo 100","modelo 303","base imponible","rendimientos del trabajo","hacienda","liquidacion fiscal","renta 20","cuota integra")
+        "Bancario/IBAN"   = @("iban","cuenta corriente","transferencia","extracto","saldo","movimientos","banco","bbva","santander","caixabank","sabadell","bankinter","ing ","openbank","bizum","tarjeta de credito","hipoteca","prestamo","ES\d{2}[\s\d]{20}")
+        "Facturas"        = @("factura","invoice","numero de factura","fecha de emision","base imponible","iva 21","iva 10","total a pagar","importe total","euros","proveedor","cliente","cif","n.i.f")
+        "Seguros"         = @("poliza","póliza","numero de poliza","tomador","asegurado","cobertura","prima","siniestro","aseguradora","mutua","mapfre","allianz","axa ","zurich","generali","sanitas","adeslas")
+        "Medico/Salud"    = @("diagnostico","diagnóstico","historia clinica","informe medico","receta","medicamento","dosis","hospital","clinica","medico","paciente","fecha de consulta","centro de salud","seguridad social","analisis","resultado","prueba")
+        "Propiedad"       = @("escritura","catastro","referencia catastral","contrato de arrendamiento","alquiler","arrendatario","arrendador","inmueble","vivienda","finca","registro de la propiedad","permiso de circulacion","itv","bastidor","matricula")
+        "Educacion"       = @("certificado de estudios","expediente academico","calificaciones","matricula","beca","universidad","titulo universitario","grado en","master en","tfg","tfm","tesis","nota media","creditos ects","centro educativo")
+        "Certificados"    = @("certificado","certificate","certifica que","acredita que","ha superado","ha completado","con fecha","con una duracion","horas lectivas","diploma","titulo de","en nombre de")
+    }
+
+    function Get-FileText([System.IO.FileInfo]$f) {
+        $ext = $f.Extension.ToLower()
+        try {
+            if ($ext -eq ".docx" -or $ext -eq ".xlsx" -or $ext -eq ".odt") {
+                Add-Type -Assembly System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+                $zip    = [System.IO.Compression.ZipFile]::OpenRead($f.FullName)
+                $xmlEntry = $zip.Entries | Where-Object { $_.FullName -match "word/document\.xml|xl/sharedStrings\.xml|content\.xml" } | Select-Object -First 1
+                if ($xmlEntry) {
+                    $reader = New-Object System.IO.StreamReader($xmlEntry.Open())
+                    $raw    = $reader.ReadToEnd()
+                    $reader.Close()
+                    $zip.Dispose()
+                    return ($raw -replace '<[^>]+>', ' ') -replace '\s+', ' '
+                }
+                $zip.Dispose()
+                return ""
+            } elseif ($ext -eq ".pdf") {
+                $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+                $ascii = [System.Text.Encoding]::Latin1.GetString($bytes)
+                # Extract readable text runs from PDF binary
+                $chunks = [regex]::Matches($ascii, '\(([^\)]{4,200})\)') | ForEach-Object { $_.Groups[1].Value }
+                return ($chunks -join ' ') -replace '\s+', ' '
+            } elseif ($ext -in @(".txt",".md",".csv",".rtf")) {
+                return (Get-Content $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
+            }
+        } catch {}
+        return ""
+    }
+
+    # Collect candidate files (excluding game/dev folders)
+    $candidateFiles = @()
+    foreach ($sDir in $contentScanDirs) {
+        if (-not (Test-Path $sDir)) { continue }
+        $allFiles = @(Get-ChildItem $sDir -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $contentExts -contains $_.Extension.ToLower() -and $_.Length -lt $maxFileSizeBytes -and $_.Length -gt 0 })
+        foreach ($file in $allFiles) {
+            $excluded = $false
+            $fp = $file.FullName
+            foreach ($excl in $contentExcludePaths) {
+                if ($fp -like "*$excl*") { $excluded = $true; break }
+            }
+            if (-not $excluded) { $candidateFiles += $file }
+        }
+    }
+
+    Write-PlanLine "Scanning $($candidateFiles.Count) document files (max 8 MB each, game/dev folders excluded)..." "INFO"
+
+    $contentResults = [ordered]@{}   # category -> list of file matches
+    $scanned = 0
+
+    foreach ($f in $candidateFiles) {
+        $text = Get-FileText $f
+        if (-not $text -or $text.Length -lt 20) { continue }
+        $textLower = $text.ToLower()
+        $scanned++
+
+        foreach ($catName in $contentCats.Keys) {
+            $keywords = $contentCats[$catName]
+            $hits = @()
+            foreach ($kw in $keywords) {
+                if ($textLower -match $kw) { $hits += $kw; break }
+            }
+            if ($hits.Count -gt 0) {
+                if (-not $contentResults.Contains($catName)) { $contentResults[$catName] = @() }
+                $contentResults[$catName] += @{ File=$f; Keyword=$hits[0] }
+                break  # one category per file
+            }
+        }
+    }
+
+    Write-PlanLine "Scanned $scanned files with readable content." "INFO"
+    Write-PlanLine "" "INFO"
+
+    if ($contentResults.Count -eq 0) {
+        Write-PlanLine "No personal document categories identified from content." "KEEP"
+    } else {
+        foreach ($catName in $contentResults.Keys) {
+            $matches = $contentResults[$catName]
+            $newest  = ($matches | Sort-Object { $_.File.LastWriteTime } -Descending | Select-Object -First 1).File.LastWriteTime
+            Write-PlanLine "$catName - $($matches.Count) file(s)  [newest: $($newest.ToString('yyyy-MM-dd'))]" "ADD"
+            $matches | Select-Object -First 4 | ForEach-Object {
+                $loc = $_.File.DirectoryName -replace [regex]::Escape($userRoot), "~"
+                Write-PlanLine "    $($_.File.Name)  [$loc]" "INFO"
+            }
+            if ($matches.Count -gt 4) { Write-PlanLine "    ... and $($matches.Count - 4) more" "INFO" }
+        }
+
+        $totalContentDocs = ($contentResults.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
+        $catCount = $contentResults.Count
+        Write-PlanLine "" "INFO"
+        Write-PlanLine "$totalContentDocs document(s) classified across $catCount categories (by content)" "INFO"
+
+        $personalCats = @("Identidad/DNI","Nominas/Laboral","Fiscal/AEAT","Bancario/IBAN","Seguros","Medico/Salud","Propiedad") |
+            Where-Object { $contentResults.Contains($_) }
+        if ($personalCats.Count -ge 2) {
+            Register-Action "Documents" "MANUAL" "Organize $totalContentDocs personal document(s) into subfolders" `
+                -Detail "Content scan found: $($personalCats -join ', '). Create category subfolders in Documents and move files from Desktop/Downloads."
+        }
+    }
+
+    # --- Organization suggestion based on Desktop state ---
+    $desktopFiles = @(Get-ChildItem "$env:USERPROFILE\Desktop" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -ne ".lnk" })
+    if ($desktopFiles.Count -gt 5) {
+        Register-Action "Documents" "MANUAL" "Organize Desktop ($($desktopFiles.Count) loose files)" `
+            -Detail "Move documents/images/archives to their proper folders. Desktop should contain shortcuts only."
+    }
+}
+
+# ============================================================
 #  MODULE: DRIVERS
 # ============================================================
 function Collect-DriversActions {
@@ -671,6 +1111,145 @@ function Collect-BackupActions {
     }
     Register-Action "Backup" "MANUAL" "Verify off-site or cloud backup strategy" `
         -Detail "External drive, OneDrive, Google Drive, etc."
+}
+
+# ============================================================
+#  MODULE: NETWORK
+# ============================================================
+function Collect-NetworkActions {
+    Show-Section "NETWORK"
+
+    # Active adapters
+    $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" })
+    Write-PlanLine "Active network adapters: $($adapters.Count)" "INFO"
+    foreach ($a in $adapters) {
+        $config = Get-NetIPConfiguration -InterfaceIndex $a.InterfaceIndex -ErrorAction SilentlyContinue
+        $ip     = ($config.IPv4Address    | Select-Object -First 1).IPAddress
+        $gw     = ($config.IPv4DefaultGateway | Select-Object -First 1).NextHop
+        $dns    = (($config.DNSServer | Where-Object { $_.AddressFamily -eq 2 } |
+                    Select-Object -First 2 | ForEach-Object { $_.ServerAddresses }) -join ", ")
+        Write-PlanLine "  $($a.Name)  [$($a.InterfaceDescription)]" "INFO"
+        if ($ip)  { Write-PlanLine "    IP: $ip   GW: $gw" "INFO" }
+        if ($dns) { Write-PlanLine "    DNS: $dns" "INFO" }
+    }
+
+    # Connectivity — ping public DNS servers
+    $targets = @(
+        @{ Host = "8.8.8.8";  Label = "Google DNS"     }
+        @{ Host = "1.1.1.1";  Label = "Cloudflare DNS" }
+        @{ Host = "9.9.9.9";  Label = "Quad9 DNS"      }
+    )
+    $anyDown = $false
+    foreach ($t in $targets) {
+        try {
+            $ping   = [System.Net.NetworkInformation.Ping]::new()
+            $result = $ping.Send($t.Host, 2000)
+            if ($result.Status -eq "Success") {
+                $ms = $result.RoundtripTime
+                if ($ms -gt 100) {
+                    Write-PlanLine "$($t.Label) ($($t.Host)): ${ms} ms  HIGH LATENCY" "WARN"
+                } else {
+                    Write-PlanLine "$($t.Label) ($($t.Host)): ${ms} ms  OK" "KEEP"
+                }
+            } else {
+                Write-PlanLine "$($t.Label) ($($t.Host)): unreachable" "WARN"
+                $anyDown = $true
+            }
+        } catch {
+            Write-PlanLine "$($t.Label) ($($t.Host)): ping failed" "WARN"
+            $anyDown = $true
+        }
+    }
+    if ($anyDown) {
+        Register-Action "Network" "MANUAL" "Internet connectivity issue detected" `
+            -Detail "One or more DNS servers unreachable - check network configuration"
+    }
+}
+
+# ============================================================
+#  MODULE: TEMPERATURE
+# ============================================================
+function Collect-TemperatureActions {
+    Show-Section "TEMPERATURE"
+
+    # CPU thermal zones via ACPI (no third-party tools needed)
+    try {
+        $zones = @(Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop)
+        if ($zones.Count -gt 0) {
+            $i = 0
+            foreach ($z in $zones) {
+                $i++
+                $celsius = [math]::Round($z.CurrentTemperature / 10.0 - 273.15, 1)
+                $label   = if ($zones.Count -eq 1) { "CPU" } else { "Thermal Zone $i" }
+                if ($celsius -gt 90) {
+                    Write-PlanLine "$label : ${celsius} C  CRITICAL" "WARN"
+                    Register-Action "Temperature" "MANUAL" "$label temperature critical (${celsius} C)" `
+                        -Detail "Check CPU cooler seating, thermal paste, and case airflow"
+                } elseif ($celsius -gt 75) {
+                    Write-PlanLine "$label : ${celsius} C  HIGH" "WARN"
+                    Register-Action "Temperature" "MANUAL" "$label temperature high (${celsius} C)" `
+                        -Detail "Monitor under load - consider reseating cooler or improving airflow"
+                } else {
+                    Write-PlanLine "$label : ${celsius} C  OK" "KEEP"
+                }
+            }
+        } else {
+            Write-PlanLine "No ACPI thermal zones found on this system" "INFO"
+        }
+    } catch {
+        Write-PlanLine "Could not read CPU temperature (ACPI access failed - run as Administrator)" "WARN"
+    }
+
+    # GPU — CIM does not expose AMD/NVIDIA GPU temps without LibreHardwareMonitor
+    $lhmPath = "$env:ProgramFiles\LibreHardwareMonitor\LibreHardwareMonitor.exe"
+    if (Test-Path $lhmPath) {
+        Write-PlanLine "GPU temperature: LibreHardwareMonitor detected but CIM bridge not queried in this version" "INFO"
+    } else {
+        Write-PlanLine "GPU temperature: requires LibreHardwareMonitor (not found)" "INFO"
+        Write-PlanLine "  Get it at: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor" "INFO"
+    }
+}
+
+# ============================================================
+#  MODULE: TOP PROCESSES
+# ============================================================
+function Collect-ProcessActions {
+    Show-Section "TOP PROCESSES"
+
+    $allProcs = @(Get-Process -ErrorAction SilentlyContinue)
+
+    # Top 5 by CPU time
+    $byCpu = @($allProcs | Where-Object { $_.CPU -ne $null } |
+               Sort-Object CPU -Descending | Select-Object -First 5)
+    Write-PlanLine "Top 5 by CPU time:" "INFO"
+    foreach ($p in $byCpu) {
+        $cpu = [math]::Round($p.CPU, 1)
+        $mem = Format-Bytes $p.WorkingSet64
+        Write-PlanLine ("  {0,-28} CPU: {1,8}s   RAM: {2}" -f $p.ProcessName, $cpu, $mem) "INFO"
+    }
+
+    Write-PlanLine "" "INFO"
+
+    # Top 5 by RAM
+    $byRam = @($allProcs | Sort-Object WorkingSet64 -Descending | Select-Object -First 5)
+    Write-PlanLine "Top 5 by RAM:" "INFO"
+    foreach ($p in $byRam) {
+        $mem = Format-Bytes $p.WorkingSet64
+        $cpu = [math]::Round($p.CPU, 1)
+        Write-PlanLine ("  {0,-28} RAM: {1,8}   CPU: {2}s" -f $p.ProcessName, $mem, $cpu) "INFO"
+    }
+
+    # Warn on processes consuming > 2 GB RAM
+    $heavy = @($allProcs | Where-Object { $_.WorkingSet64 -gt 2GB })
+    if ($heavy.Count -gt 0) {
+        Write-PlanLine "" "INFO"
+        foreach ($p in $heavy) {
+            $mem = Format-Bytes $p.WorkingSet64
+            Write-PlanLine "  HIGH MEMORY: $($p.ProcessName) using $mem" "WARN"
+            Register-Action "Processes" "MANUAL" "High-memory process: $($p.ProcessName) ($mem)" `
+                -Detail "Verify this is expected; restart the app if it looks like a memory leak"
+        }
+    }
 }
 
 # ============================================================
@@ -728,26 +1307,64 @@ function Export-Report([string]$Phase) {
 # ============================================================
 #  MAIN
 # ============================================================
+# Module registry — ordered list used for collection and interactive menu
+$AllModules = [ordered]@{
+    "Security"    = { Collect-SecurityActions    }
+    "Cleanup"     = { Collect-CleanupActions     }
+    "Startup"     = { Collect-StartupActions     }
+    "FileAnalysis"= { Collect-FileAnalysisActions}
+    "Disk"        = { Collect-DiskActions        }
+    "Documents"   = { Collect-DocumentsActions   }
+    "Drivers"     = { Collect-DriversActions     }
+    "Backup"      = { Collect-BackupActions      }
+    "Network"     = { Collect-NetworkActions     }
+    "Temperature" = { Collect-TemperatureActions }
+    "Processes"   = { Collect-ProcessActions     }
+}
+$selectedModules = [string[]]$AllModules.Keys
+
 $modeColor = if ($Mode -eq "Plan") { "Cyan" } else { "Green" }
 Write-Host ""
 Write-Host ("=" * 70) -ForegroundColor DarkCyan
-Write-Host "  PC MAINTENANCE v2.0  --  $($Mode.ToUpper()) MODE" -ForegroundColor $modeColor
+Write-Host "  PC MAINTENANCE v3.0  --  $($Mode.ToUpper()) MODE" -ForegroundColor $modeColor
 Write-Host "  $(Get-Date)  |  $env:COMPUTERNAME  |  $env:USERNAME" -ForegroundColor DarkGray
 Write-Host ("=" * 70) -ForegroundColor DarkCyan
 
-if ($Mode -eq "Plan") {
+# Interactive module selector
+if ($Interactive) {
+    Write-Host ""
+    Write-Host "  SELECT MODULES TO RUN" -ForegroundColor Cyan
+    Write-Host "  Enter numbers separated by commas, or press Enter to run all" -ForegroundColor DarkGray
+    Write-Host ""
+    $idx = 0
+    foreach ($modName in $AllModules.Keys) {
+        $idx++
+        Write-Host ("  [{0,2}] {1}" -f $idx, $modName) -ForegroundColor White
+    }
+    Write-Host ""
+    $userChoice = Read-Host "  Modules"
+    if ($userChoice.Trim() -ne "") {
+        $moduleKeys = @($AllModules.Keys)
+        $parsed = $userChoice -split ',' |
+                  ForEach-Object { $_.Trim() } |
+                  Where-Object   { $_ -match '^\d+$' } |
+                  ForEach-Object { [int]$_ - 1 } |
+                  Where-Object   { $_ -ge 0 -and $_ -lt $moduleKeys.Count }
+        $selectedModules = @($parsed | ForEach-Object { $moduleKeys[$_] })
+    }
+    Write-Host ""
+    Write-Host "  Running: $($selectedModules -join ', ')" -ForegroundColor DarkGray
+}
+
+if ($Mode -eq "Plan" -and -not $Interactive) {
     Write-Host ""
     Write-Host "  Analyzing system... (no changes will be made in Plan mode)" -ForegroundColor DarkGray
 }
 
-# --- Collect all planned actions (always runs regardless of mode) ---
-Collect-SecurityActions
-Collect-CleanupActions
-Collect-StartupActions
-Collect-FileAnalysisActions
-Collect-DiskActions
-Collect-DriversActions
-Collect-BackupActions
+# --- Collect all planned actions ---
+foreach ($modName in $selectedModules) {
+    & $AllModules[$modName]
+}
 
 # --- Plan summary ---
 $autoList   = @($script:Registry | Where-Object { $_['Type'] -eq "AUTO" })
