@@ -1,69 +1,83 @@
-# 🖥️ PC Maintenance — Windows 11
+# PC Maintenance — Windows 11
 
-Automated maintenance script for Windows 11 that handles **security checks, disk cleanup, performance tuning, driver verification, and backup reminders** — all in one run.
-
----
-
-## 📋 What it does
-
-| # | Task | Details |
-|---|------|---------|
-| 1 | 🛡️ **Security** | Checks Windows Defender status, pending Windows Updates, and Firewall profiles |
-| 2 | 🧹 **Cleanup** | Deletes temp files, clears Recycle Bin, purges Windows Update cache, rotates old logs |
-| 3 | 💾 **Disk Space** | Reports free/used space on all fixed drives, warns if below threshold |
-| 4 | ⚡ **Startup Programs** | Lists all startup entries, warns if there are too many |
-| 5 | 🔧 **Disk Optimization** | Runs TRIM on SSDs or defrag analysis on HDDs |
-| 6 | 🖱️ **Drivers** | Detects devices with driver errors (ConfigManagerErrorCode ≠ 0) |
-| 7 | 📦 **Backup Reminder** | Checks modification dates on key folders, reminds you to back up |
-
-Everything is logged to the `logs/` folder with timestamps.
+Automated maintenance suite for Windows 11 with a **Plan / Apply** workflow inspired by Terraform:
+run once to see *exactly* what would change, then run again to apply it.
 
 ---
 
-## 🚀 Quick Start
+## Modules
 
-### 1. Clone the repo
+| # | Module | What it checks / does |
+|---|--------|-----------------------|
+| 1 | **Security** | Windows Defender status & definition age, pending Windows Updates, Firewall profiles |
+| 2 | **Cleanup** | Temp files, browser caches (Chrome/Edge), Recycle Bin, Windows Update cache, log rotation |
+| 3 | **Startup Programs** | Classifies startup entries by category, auto-disables known non-essential ones, flags unknowns |
+| 4 | **File Analysis** | Desktop clutter, Downloads age/size audit, large file warnings, MD5 duplicate detection |
+| 5 | **Disk** | Free space on all fixed drives (warns below threshold), TRIM on SSDs |
+| 6 | **Drivers** | Detects devices with driver errors via `ConfigManagerErrorCode` |
+| 7 | **Backup** | Checks last-modified date on Documents & Desktop, reminds you to back up |
+
+All actions are classified as `AUTO` (safe to apply automatically) or `MANUAL` (requires human decision).
+
+---
+
+## Quick Start
+
+### 1. Clone
 
 ```powershell
-git clone https://github.com/YOUR_USERNAME/pc-maintenance.git
+git clone https://github.com/diegover2002-cmyk/pc-maintenance.git
 cd pc-maintenance
 ```
 
 ### 2. Allow PowerShell scripts (one-time)
 
-Open **PowerShell as Administrator** and run:
-
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ```
 
-### 3. Register the weekly scheduled task
+### 3. Register the weekly scheduled task (one-time)
 
 ```powershell
 cd scripts
 .\setup.ps1
 ```
 
-This registers a Windows Task Scheduler job that runs every **Sunday at 10:00 AM** automatically.
-
-### 4. Run manually anytime
-
-```powershell
-cd scripts
-.\maintenance.ps1
-```
+Registers a Task Scheduler job that runs every **Sunday at 10:00 AM** silently as SYSTEM.
 
 ---
 
-## ⚙️ Configuration
-
-Open `scripts/maintenance.ps1` and edit the `CONFIG` block at the top:
+## Usage
 
 ```powershell
-$BackupDirs     = @("$env:USERPROFILE\Documents", "$env:USERPROFILE\Desktop")
-$MinFreeGB      = 15       # warn if free space drops below this (GB)
-$MaxTempAgeDays = 7        # delete temp files older than N days
-$MaxLogAgeDays  = 30       # keep logs for N days
+# Plan mode (default) — analyze system, show all proposed actions. No changes made.
+.\scripts\maintenance.ps1
+
+# Apply mode — execute all AUTO-fixable actions from the plan.
+.\scripts\maintenance.ps1 -Mode Apply
+```
+
+After each run a plain-text report is saved to:
+- `reports/report_<mode>_<timestamp>.txt`
+- `Desktop\PC_Maintenance_Report.txt` (overwritten each run)
+
+---
+
+## Configuration
+
+Edit the `$Cfg` block at the top of `scripts/maintenance.ps1`:
+
+```powershell
+$Cfg = @{
+    MinFreeGB       = 15     # warn if free disk space drops below this (GB)
+    TempAgeDays     = 7      # delete temp files older than N days
+    LogRotateDays   = 30     # rotate logs older than N days
+    DownloadAgeDays = 60     # flag Downloads files older than N days
+    DesktopMaxFiles = 20     # warn if Desktop has more than N files
+    LargeFileMB     = 500    # flag individual files larger than N MB
+    BackupDirs      = @("$env:USERPROFILE\Documents", "$env:USERPROFILE\Desktop")
+    DupScanDirs     = @("$env:USERPROFILE\Downloads", "$env:USERPROFILE\Desktop")
+}
 ```
 
 To change the schedule, edit `scripts/setup.ps1`:
@@ -73,69 +87,47 @@ $TriggerDay  = "Sunday"   # Monday, Tuesday, ... Sunday
 $TriggerTime = "10:00"    # 24h format
 ```
 
-Then re-run `.\setup.ps1` to apply changes.
+Re-run `.\setup.ps1` to apply schedule changes.
+
+> **Note:** File Analysis only operates on paths located on the system drive (`$env:SystemDrive`).
+> Paths on other drives are skipped with a warning.
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 pc-maintenance/
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.md
+│   │   └── feature_request.md
+│   └── PULL_REQUEST_TEMPLATE.md
 ├── scripts/
-│   ├── maintenance.ps1   ← main script (all tasks)
-│   └── setup.ps1         ← registers the scheduled task (run once)
-├── logs/                 ← auto-created, gitignored
-├── .gitignore
+│   ├── maintenance.ps1   <- main script (all modules)
+│   └── setup.ps1         <- registers the scheduled task (run once)
+├── logs/                 <- auto-created, gitignored
+├── reports/              <- auto-created, gitignored
+├── CHANGELOG.md
 └── README.md
 ```
 
 ---
 
-## 🤖 Using with Claude Code
+## Requirements
 
-You can use [Claude Code](https://claude.ai/code) to modify or extend this project from your terminal:
-
-```bash
-# Install Claude Code (requires Node.js 18+)
-npm install -g @anthropic-ai/claude-code
-
-# Open the project
-cd pc-maintenance
-claude
-```
-
-Then ask things like:
-- *"Add a task that checks CPU temperature"*
-- *"Make the cleanup also clear browser caches"*
-- *"Send me a Windows notification when maintenance finishes"*
+- Windows 10 / 11
+- PowerShell 5.1 or later (7+ recommended)
+- **Run as Administrator**
 
 ---
 
-## 📝 Logs
+## Changelog
 
-Logs are saved to `logs/maintenance_YYYYMMDD_HHMMSS.log` and automatically deleted after 30 days.
-
-Example:
-
-```
-[2026-03-17 10:00:01][OK]   Windows Defender: ENABLED
-[2026-03-17 10:00:02][OK]   Defender definitions: up to date (1 days old)
-[2026-03-17 10:00:03][WARN] Windows Update: 3 pending update(s) found
-[2026-03-17 10:00:05][OK]   User TEMP: removed 142 files (38.4 MB freed)
-[2026-03-17 10:00:06][OK]   Recycle Bin: emptied
-[2026-03-17 10:00:07][OK]   Total space freed this run: 214.7 MB
-```
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 ---
 
-## ⚠️ Requirements
-
-- Windows 11 (works on Windows 10 too)
-- PowerShell 5.1 or later
-- **Run as Administrator** (required for cleanup and security checks)
-
----
-
-## 📄 License
+## License
 
 MIT — use freely, modify as you like.
