@@ -465,11 +465,23 @@ function Collect-StartupActions {
 # ============================================================
 #  MODULE: FILE ANALYSIS
 # ============================================================
+function Test-OnSystemDrive([string]$Path) {
+    $sysDrive = $env:SystemDrive.TrimEnd('\').ToUpper()
+    return $Path.ToUpper().StartsWith($sysDrive)
+}
+
 function Collect-FileAnalysisActions {
     Show-Section "FILE ANALYSIS"
 
+    $sysDrive = $env:SystemDrive.TrimEnd('\').ToUpper()
+    Write-PlanLine "Scope: system drive only ($sysDrive\)" "INFO"
+
     # Desktop clutter
     $desktop      = "$env:USERPROFILE\Desktop"
+    if (-not (Test-OnSystemDrive $desktop)) {
+        Write-PlanLine "Skipping Desktop: not on system drive ($desktop)" "WARN"
+        return
+    }
     $desktopItems = @(Get-ChildItem $desktop -File -ErrorAction SilentlyContinue)
     $shortcuts    = @($desktopItems | Where-Object { $_.Extension -eq ".lnk" })
     $loose        = @($desktopItems | Where-Object { $_.Extension -ne ".lnk" })
@@ -489,7 +501,9 @@ function Collect-FileAnalysisActions {
 
     # Downloads - old files
     $dlPath = "$env:USERPROFILE\Downloads"
-    if (Test-Path $dlPath) {
+    if (-not (Test-OnSystemDrive $dlPath)) {
+        Write-PlanLine "Skipping Downloads: not on system drive ($dlPath)" "WARN"
+    } elseif (Test-Path $dlPath) {
         $allDL    = @(Get-ChildItem $dlPath -File -ErrorAction SilentlyContinue)
         $dlSize   = [long]($allDL | Measure-Object -Property Length -Sum).Sum
         Write-PlanLine "Downloads: $($allDL.Count) files, $(Format-Bytes $dlSize) total" "INFO"
@@ -519,9 +533,12 @@ function Collect-FileAnalysisActions {
     }
 
     # Duplicate detection (MD5 hash, files < 500 MB)
-    Write-PlanLine "Scanning for duplicate files in Downloads and Desktop..." "INFO"
+    $safeDupDirs = @($Cfg.DupScanDirs | Where-Object { Test-OnSystemDrive $_ })
+    $skipped     = @($Cfg.DupScanDirs | Where-Object { -not (Test-OnSystemDrive $_) })
+    foreach ($s in $skipped) { Write-PlanLine "Skipping dup scan dir (not system drive): $s" "WARN" }
+    Write-PlanLine "Scanning for duplicate files in: $($safeDupDirs -join ', ')..." "INFO"
     $candidates = @()
-    foreach ($dir in $Cfg.DupScanDirs) {
+    foreach ($dir in $safeDupDirs) {
         if (Test-Path $dir) {
             $candidates += @(Get-ChildItem $dir -File -ErrorAction SilentlyContinue |
                              Where-Object { $_.Length -gt 0 -and $_.Length -lt 500MB })
