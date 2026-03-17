@@ -43,7 +43,7 @@ $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $TriggerDay -At $Trigger
 # Build action — run PowerShell as admin with bypass for execution policy
 $action = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`" -Mode Apply"
 
 # Run as SYSTEM so it always has admin rights, even when no user is logged in
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
@@ -53,7 +53,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
     -RestartCount 1 `
     -RestartInterval (New-TimeSpan -Minutes 5) `
-    -StartWhenAvailable `   # run at next opportunity if PC was off at trigger time
+    -StartWhenAvailable `
     -MultipleInstances IgnoreNew
 
 # Register
