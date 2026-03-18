@@ -457,19 +457,25 @@ function Register-Action {
         [ValidateSet("AUTO","MANUAL")]
         [string]$Type,
         [string]$Label,
-        [string]$Detail      = "",
-        [long]  $Bytes       = 0,
-        [scriptblock]$Run    = {}
+        [string]$Detail         = "",
+        [long]  $Bytes          = 0,
+        [scriptblock]$Run       = {},
+        [string]$ImpactLevel    = "Low",      # Dashboard: Low, Medium, High
+        [int]   $RiskFactor     = 0,          # Dashboard: 0-100
+        [int]   $EstimatedSecs  = 5           # Dashboard: estimated execution time
     )
     $script:Registry.Add(@{
-        Module = $Module
-        Type   = $Type
-        Label  = $Label
-        Detail = $Detail
-        Bytes  = $Bytes
-        Run    = $Run
-        OK     = $null
-        Output = ""
+        Module          = $Module
+        Type            = $Type
+        Label           = $Label
+        Detail          = $Detail
+        Bytes           = $Bytes
+        Run             = $Run
+        OK              = $null
+        Output          = ""
+        ImpactLevel     = $ImpactLevel
+        RiskFactor      = $RiskFactor
+        EstimatedSecs   = $EstimatedSecs
     })
 }
 
@@ -1824,6 +1830,198 @@ function Export-ReportJSON([string]$Phase, [long]$Bytes) {
 }
 
 # ============================================================
+#  DASHBOARD - INTERACTIVE ACTION PREVIEW
+# ============================================================
+function Show-Dashboard {
+    param(
+        [System.Collections.Generic.List[hashtable]]$AutoActions,
+        [System.Collections.Generic.List[hashtable]]$ManualActions
+    )
+
+    $allCount = $AutoActions.Count + $ManualActions.Count
+    if ($allCount -eq 0) {
+        Write-Host "  No actions to review." -ForegroundColor Green
+        return $AutoActions
+    }
+
+    # Calculate total estimated time
+    $totalSecs = ($AutoActions | ForEach-Object { $_['EstimatedSecs'] } | Measure-Object -Sum).Sum
+    $totalMins = [math]::Ceiling($totalSecs / 60)
+
+    Write-Host ""
+    Write-Host ("=" * 70) -ForegroundColor Cyan
+    Write-Host "  INTERACTIVE DASHBOARD" -ForegroundColor Cyan
+    Write-Host ("=" * 70) -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Summary:" -ForegroundColor White
+    Write-Host "    Total actions: $allCount" -ForegroundColor Gray
+    Write-Host "    Auto-fixable: $($AutoActions.Count)" -ForegroundColor Green
+    Write-Host "    Manual items: $($ManualActions.Count)" -ForegroundColor Yellow
+    Write-Host "    Estimated time: ~$totalMins minute(s)" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Group by module with impact visualization
+    $modules = @()
+    $byModule = @{}
+    $AutoActions | ForEach-Object {
+        $mod = $_['Module']
+        if (-not $byModule[$mod]) { $byModule[$mod] = @() }
+        $byModule[$mod] += $_
+        if ($mod -notin $modules) { $modules += $mod }
+    }
+
+    Write-Host "  Actions by module:" -ForegroundColor White
+    $modules | Sort-Object | ForEach-Object {
+        $actions = $byModule[$_]
+        $count = $actions.Count
+        $impact = ($actions | Group-Object -Property ImpactLevel | Sort-Object -Property Name -Descending)[0].Name
+        $bar = if ($count -ge 5) { "█████" } elseif ($count -ge 3) { "███" } elseif ($count -ge 1) { "██" } else { "█" }
+        Write-Host "    ✓ $_ ($count)" -ForegroundColor Cyan -NoNewline
+        Write-Host "  [$bar]  Impact: $impact" -ForegroundColor White
+    }
+    Write-Host ""
+
+    # Menu
+    Write-Host "  What would you like to do?" -ForegroundColor White
+    Write-Host ""
+    Write-Host "    [1] Execute ALL auto-fixable actions" -ForegroundColor Green
+    Write-Host "    [2] Review actions by module first" -ForegroundColor Yellow
+    Write-Host "    [3] Review by impact level" -ForegroundColor Yellow
+    Write-Host "    [4] Cancel (no changes)" -ForegroundColor Red
+    Write-Host ""
+
+    $choice = Read-Host "  Enter choice (1-4)"
+
+    switch ($choice.Trim()) {
+        "1" {
+            Write-Host ""
+            Write-Host "  Proceeding with all $($AutoActions.Count) auto-fixable actions..." -ForegroundColor Green
+            Write-Host ""
+            return $AutoActions
+        }
+        "2" {
+            return Show-DashboardByModule -AutoActions $AutoActions
+        }
+        "3" {
+            return Show-DashboardByImpact -AutoActions $AutoActions
+        }
+        "4" {
+            Write-Host ""
+            Write-Host "  Cancelled. No changes will be made." -ForegroundColor Yellow
+            Write-Host ""
+            exit 0
+        }
+        default {
+            Write-Host ""
+            Write-Host "  Invalid choice. Proceeding with all actions..." -ForegroundColor Yellow
+            return $AutoActions
+        }
+    }
+}
+
+function Show-DashboardByModule {
+    param([System.Collections.Generic.List[hashtable]]$AutoActions)
+
+    $byModule = @{}
+    $AutoActions | ForEach-Object {
+        $mod = $_['Module']
+        if (-not $byModule[$mod]) { $byModule[$mod] = @() }
+        $byModule[$mod] += $_
+    }
+
+    Write-Host ""
+    Write-Host "  Select modules to execute:" -ForegroundColor White
+    $modules = @($byModule.Keys | Sort-Object)
+
+    $idx = 0
+    $modules | ForEach-Object {
+        $idx++
+        $count = $byModule[$_].Count
+        Write-Host "    [$idx] $_" -ForegroundColor Cyan -NoNewline
+        Write-Host "  ($count action(s))" -ForegroundColor Gray
+    }
+
+    Write-Host "    [0] Execute ALL" -ForegroundColor Green
+    Write-Host "    [C] Cancel" -ForegroundColor Red
+    Write-Host ""
+
+    $choice = Read-Host "  Enter selection (comma-separated for multiple, e.g. 1,3)"
+
+    if ($choice -eq "C" -or $choice -eq "c") {
+        Write-Host "  Cancelled." -ForegroundColor Yellow
+        exit 0
+    }
+
+    if ($choice -eq "0") {
+        return $AutoActions
+    }
+
+    $selected = @()
+    $choice -split ',' | ForEach-Object {
+        $idx = [int]$_.Trim() - 1
+        if ($idx -ge 0 -and $idx -lt $modules.Count) {
+            $selected += $byModule[$modules[$idx]]
+        }
+    }
+
+    if ($selected.Count -eq 0) {
+        Write-Host "  No modules selected. Proceeding with all..." -ForegroundColor Yellow
+        return $AutoActions
+    }
+
+    Write-Host ""
+    Write-Host "  Executing $($selected.Count) action(s)..." -ForegroundColor Green
+    return $selected
+}
+
+function Show-DashboardByImpact {
+    param([System.Collections.Generic.List[hashtable]]$AutoActions)
+
+    $byImpact = @{ "High" = @(); "Medium" = @(); "Low" = @() }
+    $AutoActions | ForEach-Object {
+        $level = $_['ImpactLevel']
+        $byImpact[$level] += $_
+    }
+
+     Write-Host ""
+    Write-Host "  Select by impact level:" -ForegroundColor White
+    Write-Host "    [H] High impact ($($byImpact['High'].Count) action(s))" -ForegroundColor Red
+    Write-Host "    [M] Medium impact ($($byImpact['Medium'].Count) action(s))" -ForegroundColor Yellow
+    Write-Host "    [L] Low impact ($($byImpact['Low'].Count) action(s))" -ForegroundColor Green
+    Write-Host "    [A] all levels" -ForegroundColor Cyan
+    Write-Host "    [C] Cancel" -ForegroundColor Red
+    Write-Host ""
+
+    $choice = Read-Host "  Enter choice"
+
+    if ($choice -eq "C" -or $choice -eq "c") {
+        Write-Host "  Cancelled." -ForegroundColor Yellow
+        exit 0
+    }
+
+    $selected = @()
+    switch ($choice.ToUpper()) {
+        "H" { $selected += $byImpact['High'] }
+        "M" { $selected += $byImpact['Medium'] }
+        "L" { $selected += $byImpact['Low'] }
+        "A" { $selected += $AutoActions }
+        default {
+            Write-Host "  Invalid choice. Proceeding with all..." -ForegroundColor Yellow
+            return $AutoActions
+        }
+    }
+
+    if ($selected.Count -eq 0) {
+        Write-Host "  No actions in that category. Proceeding with all..." -ForegroundColor Yellow
+        return $AutoActions
+    }
+
+    Write-Host ""
+    Write-Host "  Executing $($selected.Count) action(s)..." -ForegroundColor Green
+    return $selected
+}
+
+# ============================================================
 #  MAIN
 # ============================================================
 # Module registry — ordered list used for collection and interactive menu
@@ -1934,15 +2132,22 @@ if ($Mode -eq "Plan") {
     # APPLY
     # ----------------------------------------------------------------
     Write-Host ("=" * 70) -ForegroundColor DarkCyan
-    Write-Host "  APPLYING $($autoList.Count) ACTIONS" -ForegroundColor Green
+    Write-Host "  APPLY MODE" -ForegroundColor Green
+    Write-Host ("=" * 70) -ForegroundColor DarkCyan
+
+    # Show interactive dashboard to select actions
+    $selectedActions = Show-Dashboard -AutoActions $autoList -ManualActions $manualList
+
+    Write-Host ("=" * 70) -ForegroundColor DarkCyan
+    Write-Host "  APPLYING $($selectedActions.Count) ACTIONS" -ForegroundColor Green
     Write-Host ("=" * 70) -ForegroundColor DarkCyan
     Write-Host ""
 
     $i = 0
-    foreach ($action in $autoList) {
+    foreach ($action in $selectedActions) {
         $i++
         $label = $action['Label']
-        Write-Host "  [$i/$($autoList.Count)] [$($action['Module'])] $label" -ForegroundColor White
+        Write-Host "  [$i/$($selectedActions.Count)] [$($action['Module'])] $label" -ForegroundColor White
         try {
             & $action['Run']
             $action['OK']     = $true
