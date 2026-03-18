@@ -1868,8 +1868,8 @@ function Show-Dashboard {
         $actions = $byModule[$_]
         $count = $actions.Count
         $impact = ($actions | Group-Object -Property ImpactLevel | Sort-Object -Property Name -Descending)[0].Name
-        $bar = if ($count -ge 5) { "█████" } elseif ($count -ge 3) { "███" } elseif ($count -ge 1) { "██" } else { "█" }
-        Write-Host "    ✓ $_ ($count)" -ForegroundColor Cyan -NoNewline
+        $bar = if ($count -ge 5) { "#####" } elseif ($count -ge 3) { "###" } elseif ($count -ge 1) { "##" } else { "#" }
+        Write-Host "    [ok] $_ [$count]" -ForegroundColor Cyan -NoNewline
         Write-Host "  [$bar]  Impact: $impact" -ForegroundColor White
     }
     Write-Host ""
@@ -2033,7 +2033,7 @@ function New-Snapshot {
     # Create README
     $readmePath = Join-Path $snapshotDir "README.txt"
     if (-not (Test-Path $readmePath)) {
-        $readmeContent = @"
+        $readmeContent = @'
 PC MAINTENANCE - SYSTEM RESTORE POINT
 =====================================
 
@@ -2056,7 +2056,7 @@ SAFETY:
 - Rollback scripts are idempotent (safe to run multiple times)
 - Always backup important data before applying maintenance
 - Keep last 10 snapshots for history (older ones are auto-deleted)
-"@
+'@
         [System.IO.File]::WriteAllText($readmePath, $readmeContent, [System.Text.Encoding]::UTF8)
     }
 
@@ -2148,7 +2148,7 @@ function Generate-RollbackScript {
         $idx++
         $rollback = $action.rollbackInfo
 
-        [void]$sb.AppendLine("# Action $idx: $($action.label)")
+        [void]$sb.AppendLine("# Action ${idx}: $($action.label)")
         [void]$sb.AppendLine("Write-Host '  [$idx] [$($action.module)] $($action.label)' -ForegroundColor Yellow")
         [void]$sb.AppendLine("Write-Host '      Type: $($rollback.type) - $($rollback.note)' -ForegroundColor Gray")
 
@@ -2191,9 +2191,9 @@ function Restore-FromSnapshot {
     Write-Host "Machine: $($snapshot.machine) | User: $($snapshot.user)" -ForegroundColor Gray
     Write-Host ""
 
-    Write-Host "Actions in snapshot ($($snapshot.actionsCount)):" -ForegroundColor White
+    Write-Host "Actions in snapshot - $($snapshot.actionsCount) total:" -ForegroundColor White
     foreach ($action in $snapshot.actions) {
-        Write-Host "  ✓ [$($action.module)] $($action.label)" -ForegroundColor Gray
+        Write-Host "  [ok] [$($action.module)] $($action.label)" -ForegroundColor Gray
     }
     Write-Host ""
 
@@ -2241,7 +2241,8 @@ function Get-MaintenanceSnapshots {
     Write-Host "Available snapshots:" -ForegroundColor White
     $snapshots | ForEach-Object {
         $json = Get-Content $_.FullName -Raw | ConvertFrom-Json
-        Write-Host "  [$($_.BaseName)] - $($json.localTimestamp) ($($json.actionsCount) actions)" -ForegroundColor Cyan
+        $info = "  [{0}] - {1} - {2} actions" -f $_.BaseName, $json.localTimestamp, $json.actionsCount
+        Write-Host $info -ForegroundColor Cyan
     }
 
     return $snapshots
@@ -2338,9 +2339,9 @@ $rPathHTML = Export-Report -Phase $Mode -Format "HTML"
 $rPathJSON = Export-Report -Phase $Mode -Format "JSON"
 
 Write-Log "Report exported: $rPathText (+ HTML and JSON)" "OK"
-Write-Host "  📄 Text:  $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor DarkGray
-Write-Host "  🌐 HTML:  $env:USERPROFILE\Desktop\PC_Maintenance_Report.html" -ForegroundColor DarkGray
-Write-Host "  📋 JSON:  $rPathJSON" -ForegroundColor DarkGray
+Write-Host "  [txt]  $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor DarkGray
+Write-Host "  [html] $env:USERPROFILE\Desktop\PC_Maintenance_Report.html" -ForegroundColor DarkGray
+Write-Host "  [json] $rPathJSON" -ForegroundColor DarkGray
 Write-Host ""
 
 if ($Mode -eq "Plan") {
@@ -2410,8 +2411,8 @@ if ($Mode -eq "Plan") {
     Write-Host "  Succeeded : $success" -ForegroundColor Green
     if ($failed -gt 0) { Write-Host "  Failed    : $failed" -ForegroundColor Red }
     Write-Host "  Log file  : $LogFile" -ForegroundColor DarkGray
-    Write-Host "  📄 Text:   $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor Cyan
-    Write-Host "  🌐 HTML:   $env:USERPROFILE\Desktop\PC_Maintenance_Report.html" -ForegroundColor Cyan
+    Write-Host "  [txt]  $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor Cyan
+    Write-Host "  [html] $env:USERPROFILE\Desktop\PC_Maintenance_Report.html" -ForegroundColor Cyan
     Write-Host ""
 
     if ($manualList.Count -gt 0) {
