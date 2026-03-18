@@ -162,6 +162,289 @@ function Show-Section([string]$Title) {
 }
 
 # ============================================================
+#  ZONE.IDENTIFIER & FILE ANALYSIS HELPERS
+# ============================================================
+
+function Read-ZoneIdentifier([string]$FilePath) {
+    <#
+    .SYNOPSIS
+    Reads the Zone.Identifier alternate data stream to determine file origin
+    Zone Values: 0=Local, 1=Intranet, 3=Internet (HIGH RISK), 4=Restricted
+    #>
+    try {
+        # Method 1: Direct stream read (PowerShell 5.1+)
+        $zoneStream = "${FilePath}:Zone.Identifier"
+        $zone = Get-Content $zoneStream -Raw -ErrorAction SilentlyContinue -Encoding ASCII
+        if ($zone -match 'ZoneId=(\d+)') {
+            return [int]$matches[1]
+        }
+    }
+    catch { }
+
+    return -1  # Unknown if not found
+}
+
+function Get-ZoneIdentifierSafe([string]$FilePath) {
+    <#
+    .SYNOPSIS
+    Safe wrapper for Read-ZoneIdentifier with error handling and labeling
+    #>
+    try {
+        $zone = Read-ZoneIdentifier $FilePath
+        $zoneMap = @{
+            0 = "Local Computer"
+            1 = "Intranet"
+            3 = "Internet"
+            4 = "Restricted"
+            -1 = "Unknown"
+        }
+
+        return @{
+            Zone       = $zone
+            ZoneName   = $zoneMap[if ($zone -in $zoneMap.Keys) { $zone } else { -1 }]
+            IsInternet = ($zone -eq 3)
+            IsRestricted = ($zone -eq 4)
+            Risky      = ($zone -in @(3, 4))
+        }
+    }
+    catch {
+        return @{ Zone = -1; ZoneName = "Unknown"; IsInternet = $false; IsRestricted = $false; Risky = $false }
+    }
+}
+
+function Get-FileRiskMetadata([string]$FilePath) {
+    <#
+    .SYNOPSIS
+    Collects comprehensive metadata for file risk assessment
+    #>
+    try {
+        $file = Get-Item $FilePath -ErrorAction Stop
+        $hash = (Get-FileHash $FilePath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+
+        $metadata = @{
+            Name           = $file.Name
+            Size           = $file.Length
+            Extension      = $file.Extension.ToLower()
+            CreatedTime    = $file.CreationTime
+            ModifiedTime   = $file.LastWriteTime
+            ZoneIdentifier = (Read-ZoneIdentifier $FilePath)
+            SHA256         = $hash
+            IsExecutable   = $false
+        }
+
+        # Detection: Executables and scripts
+        $dangerousExts = @(".exe", ".msi", ".scr", ".vbs", ".js", ".bat", ".cmd", ".ps1", ".com", ".pif")
+        $metadata.IsExecutable = $dangerousExts -contains $metadata.Extension
+
+        # Detection: Code artifact patterns
+        if ($metadata.Extension -in @(".ps1", ".bat", ".cmd", ".vbs")) {
+            try {
+                $content = Get-Content $FilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                $metadata.HasSuspiciousPatterns = @()
+
+                $suspiciousPatterns = @(
+                    "Invoke-WebRequest",
+                    "DownloadString","DownloadFile",
+                    "New-Object.*COM",
+                    "WScript.Shell",
+                    "rundll32",
+                    "cmd /c",
+                    "powershell -enc",
+                    "IEx",
+                    "-NoExit",
+                    "-nop",
+                    "-enc"
+                )
+
+                foreach ($pattern in $suspiciousPatterns) {
+                    if ($content -match $pattern) {
+                        $metadata.HasSuspiciousPatterns += $pattern
+                    }
+                }
+            }
+            catch { }
+        }
+
+        # Detection: Digital signature (for executables)
+        if ($metadata.IsExecutable -and $metadata.Extension -eq ".exe") {
+            try {
+                $sig = Get-AuthenticodeSignature $FilePath -ErrorAction SilentlyContinue
+                $metadata.Signed = ($sig.Status -eq "Valid")
+                if ($sig.SignerCertificate) {
+                    $metadata.SignerCompany = ($sig.SignerCertificate.Subject -split ',')[0]
+                }
+            }
+            catch { }
+        }
+
+        return $metadata
+    }
+    catch {
+        return @{ Name = [IO.Path]::GetFileName($FilePath); Error = $true }
+    }
+}
+
+function Calculate-RiskScore($FileMetadata) {
+    <#
+    .SYNOPSIS
+    Computes 0-100 risk score based on file metadata
+    Returns: @{ Score=int, Level="LOW"|"MEDIUM"|"HIGH"|"CRITICAL", Reasons=@() }
+    #>
+    if ($FileMetadata.Error) {
+        return @{ Score = 0; Level = "UNKNOWN"; Reasons = @("Could not analyze file") }
+    }
+
+    $score = 0
+    $reasons = @()
+
+    # --- Extension risk (0-30 points) ---
+    $criticalExes = @(".exe", ".msi", ".scr", ".bat", ".cmd", ".vbs", ".ps1")
+    if ($FileMetadata.Extension -in $criticalExes) {
+        $score += 20
+        $reasons += "Executable file type"
+    }
+
+    # --- Zone risk (0-25 points) ---
+    if ($FileMetadata.ZoneIdentifier -eq 3) {
+        $score += 20
+        $reasons += "Downloaded from Internet"
+    }
+    elseif ($FileMetadata.ZoneIdentifier -eq 4) {
+        $score += 25
+        $reasons += "From restricted zone"
+    }
+
+    # --- Size risk (0-15 points) ---
+    if ($FileMetadata.Size -gt 100MB) {
+        $score += 8
+        $reasons += "Large file size (>100MB)"
+    }
+
+    # --- Signature risk (0-20 points) ---
+    if ($FileMetadata.IsExecutable -and $FileMetadata.Signed -eq $false) {
+        $score += 15
+        $reasons += "Not digitally signed"
+    }
+
+    # --- Suspicious code patterns (0-30 points) ---
+    if ($FileMetadata.HasSuspiciousPatterns -and $FileMetadata.HasSuspiciousPatterns.Count -gt 0) {
+        $score += 20
+        $reasons += "Suspicious code patterns detected: $($FileMetadata.HasSuspiciousPatterns -join ', ')"
+    }
+
+    # --- Trust heuristic: Known vendors (reduce score) ---
+    $trustedVendors = @("Microsoft", "Adobe", "Google", "Mozilla", "Apple", "Oracle", "Intel", "NVIDIA")
+    if ($FileMetadata.SignerCompany) {
+        foreach ($vendor in $trustedVendors) {
+            if ($FileMetadata.SignerCompany -like "*$vendor*") {
+                $score = [Math]::Max(0, $score - 15)
+                $reasons += "Signed by trusted vendor"
+                break
+            }
+        }
+    }
+
+    # --- Age heuristic: Very old files ---
+    $ageMonths = [Math]::Round(((Get-Date) - $FileMetadata.ModifiedTime).TotalDays / 30)
+    if ($ageMonths -gt 24) {
+        $score += 5
+        $reasons += "Not modified in $ageMonths months"
+    }
+
+    return @{
+        Score   = [Math]::Min(100, $score)
+        Level   = if ($score -ge 70) { "CRITICAL" } elseif ($score -ge 45) { "HIGH" } elseif ($score -ge 25) { "MEDIUM" } else { "LOW" }
+        Reasons = $reasons
+    }
+}
+
+function New-SuspiciousFileVault {
+    <#
+    .SYNOPSIS
+    Creates or returns path to the personal quarantine vault for suspicious files
+    #>
+    $vaultPath = Join-Path $env:USERPROFILE ".suspicious_quarantine"
+
+    if (-not (Test-Path $vaultPath)) {
+        $null = New-Item -ItemType Directory -Path $vaultPath -Force -ErrorAction SilentlyContinue
+        $null = cmd /c attrib +h "$vaultPath" 2>$null  # Hide folder
+
+        # Create README
+        $readmeContent = @"
+QUARANTINE FOLDER
+=================
+This folder contains files flagged as potentially suspicious by PC Maintenance.
+
+FILES ARE NOT DELETED - they are moved here for manual review.
+
+** DO NOT RUN FILES FROM THIS FOLDER unless you are certain they are safe **
+** DO NOT connect removable media to copy files from here **
+
+To permanently delete a file:
+  Remove-Item "$vaultPath\filename.ext" -Force
+
+To restore a file, manually move it back and unblock it.
+
+See quarantine_log.jsonl for audit trail.
+"@
+        $readmeContent | Out-File (Join-Path $vaultPath "README.txt") -Encoding UTF8 -Force -ErrorAction SilentlyContinue
+    }
+
+    return $vaultPath
+}
+
+function Move-SuspiciousFile {
+    <#
+    .SYNOPSIS
+    Moves a suspicious file to the quarantine vault with audit logging
+    #>
+    param(
+        [string]$FilePath,
+        [string]$Reason = "Risk assessment flagged"
+    )
+
+    $vaultPath = New-SuspiciousFileVault
+    try {
+        $file = Get-Item $FilePath -ErrorAction Stop
+
+        # Create timestamped subfolder
+        $dateFolder = Join-Path $vaultPath (Get-Date -Format "yyyy-MM")
+        $null = New-Item -ItemType Directory -Path $dateFolder -Force -ErrorAction SilentlyContinue
+
+        # Avoid collisions
+        $destFile = Join-Path $dateFolder $file.Name
+        $counter = 1
+        while (Test-Path $destFile) {
+            $destFile = Join-Path $dateFolder "$($file.BaseName)_$counter$($file.Extension)"
+            $counter++
+        }
+
+        # Move file
+        Move-Item -Path $FilePath -Destination $destFile -Force -ErrorAction SilentlyContinue
+
+        # Log
+        $logEntry = @{
+            Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            OriginalPath = $FilePath
+            FileName = $file.Name
+            FileSize = $file.Length
+            Reason = $Reason
+            SHA256 = (Get-FileHash $file -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+            QuarantinePath = $destFile
+        } | ConvertTo-Json -Compress
+
+        Add-Content -Path (Join-Path $vaultPath "quarantine_log.jsonl") -Value $logEntry -Encoding UTF8 -ErrorAction SilentlyContinue
+
+        Write-PlanLine "Quarantined: $($file.Name)" "WARN"
+        return $destFile
+    }
+    catch {
+        Write-PlanLine "Failed to quarantine $FilePath : $_" "WARN"
+        return $null
+    }
+}
+
+# ============================================================
 #  ACTION REGISTRY
 # ============================================================
 $script:Registry = [System.Collections.Generic.List[hashtable]]::new()
@@ -683,6 +966,7 @@ function Collect-DocumentsActions {
     $allSensitive  = @()
     $allOrphaned   = @()
     $allOldLarge   = @()
+    $emptyFoldersByDir = @{}  # BUG FIX: Accumulate empty folders by directory to avoid variable overwrites
 
     foreach ($dir in $scanDirs) {
         if (-not (Test-Path $dir.P)) { continue }
@@ -771,10 +1055,22 @@ function Collect-DocumentsActions {
             Where-Object { @(Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue).Count -eq 0 })
         if ($emptyFolders.Count -gt 0) {
             Write-PlanLine "  $($emptyFolders.Count) empty subfolder(s) in $($dir.L)" "DEL"
-            $foldersToDelete = $emptyFolders
-            Register-Action "Documents" "AUTO" "Delete $($emptyFolders.Count) empty folder(s) in $($dir.L)" `
-                -Run { $foldersToDelete | ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue } }.GetNewClosure()
+            # BUG FIX: Store by directory name to avoid variable overwrites in closure
+            $emptyFoldersByDir[$dir.L] = $emptyFolders
         }
+    }
+
+    # BUG FIX: Register delete actions AFTER loop to ensure correct variable captures
+    foreach ($dirLabel in $emptyFoldersByDir.Keys) {
+        $folderList = $emptyFoldersByDir[$dirLabel]
+        $currentDirLabel = $dirLabel  # Capture direction label for this iteration
+        Register-Action "Documents" "AUTO" "Delete $($folderList.Count) empty folder(s) in $currentDirLabel" `
+            -Run (
+                {
+                    param($folders)
+                    $folders | ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+                }.Bind($null, $folderList)
+            )
     }
 
     # --- Semantic document classification ---
