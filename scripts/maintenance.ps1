@@ -1073,12 +1073,9 @@ function Collect-DocumentsActions {
         $folderList = $emptyFoldersByDir[$dirLabel]
         $currentDirLabel = $dirLabel  # Capture direction label for this iteration
         Register-Action "Documents" "AUTO" "Delete $($folderList.Count) empty folder(s) in $currentDirLabel" `
-            -Run (
-                {
-                    param($folders)
-                    $folders | ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
-                }.Bind($null, $folderList)
-            )
+            -Run ({
+                $folderList | ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+            }.GetNewClosure())
     }
 
     # --- Semantic document classification ---
@@ -1661,14 +1658,11 @@ function Collect-AdvancedFileAnalysisActions {
         $criticalList = $criticalRiskFiles
         Register-Action "Security" "AUTO" "Quarantine $($criticalRiskFiles.Count) CRITICAL risk file(s)" `
             -Detail "Files will be moved to ~/.suspicious_quarantine for manual review" `
-            -Run (
-                {
-                    param($files)
-                    foreach ($item in $files) {
-                        Move-SuspiciousFile -FilePath $item.File.FullName -Reason "$($item.Risk.Score)/100 CRITICAL: $($item.Risk.Reasons -join '; ')"
-                    }
-                }.Bind($null, $criticalList)
-            )
+            -Run ({
+                foreach ($item in $criticalList) {
+                    Move-SuspiciousFile -FilePath $item.File.FullName -Reason "$($item.Risk.Score)/100 CRITICAL: $($item.Risk.Reasons -join '; ')"
+                }
+            }.GetNewClosure())
     }
 
     # --- Report: High risk files (manual review) ---
@@ -1783,7 +1777,6 @@ function Export-ReportHTML([string]$Phase, [long]$Bytes) {
 
     # Convert to JSON
     $jsonData = ConvertTo-Json -InputObject $reportData -Depth 10
-    $jsonData = $jsonData -replace "\`"", "\`"\`""
 
     # Read template
     $template = Get-Content -Path $templatePath -Raw -Encoding UTF8
@@ -1938,7 +1931,7 @@ function Show-DashboardByModule {
         $idx++
         $count = $byModule[$_].Count
         Write-Host "    [$idx] $_" -ForegroundColor Cyan -NoNewline
-        Write-Host "  ($count action(s))" -ForegroundColor Gray
+        Write-Host "  [$count items]" -ForegroundColor Gray
     }
 
     Write-Host "    [0] Execute ALL" -ForegroundColor Green
@@ -1985,9 +1978,9 @@ function Show-DashboardByImpact {
 
      Write-Host ""
     Write-Host "  Select by impact level:" -ForegroundColor White
-    Write-Host "    [H] High impact ($($byImpact['High'].Count) action(s))" -ForegroundColor Red
-    Write-Host "    [M] Medium impact ($($byImpact['Medium'].Count) action(s))" -ForegroundColor Yellow
-    Write-Host "    [L] Low impact ($($byImpact['Low'].Count) action(s))" -ForegroundColor Green
+    Write-Host "    [H] High impact: $($byImpact['High'].Count) items" -ForegroundColor Red
+    Write-Host "    [M] Medium impact: $($byImpact['Medium'].Count) items" -ForegroundColor Yellow
+    Write-Host "    [L] Low impact: $($byImpact['Low'].Count) items" -ForegroundColor Green
     Write-Host "    [A] all levels" -ForegroundColor Cyan
     Write-Host "    [C] Cancel" -ForegroundColor Red
     Write-Host ""
