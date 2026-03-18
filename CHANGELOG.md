@@ -23,7 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Documents module empty folder deletion bug**: Fixed null reference error caused by variable overwrites in closures
   * Accumulates empty folders by directory before registration
-  * Uses proper parameter binding (.Bind) for scriptblock closures
+  * Uses `.GetNewClosure()` for correct variable capture in loop scriptblocks
+- **Advanced File Analysis quarantine action**: scriptblock used invalid `.Bind()` method (not available on PowerShell scriptblocks); replaced with `.GetNewClosure()` for proper variable capture
+- **HTML report JSON corruption**: removed malformed `-replace` on `ConvertTo-Json` output that doubled all escaped quotes, breaking the JSON embedded in the report
+- **Pester test suite**: updated to require Pester v5 (was using v5 syntax but only v3 was installed)
 
 ### Improved
 - README now includes Advanced File Analysis module in table
