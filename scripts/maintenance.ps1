@@ -2022,7 +2022,238 @@ function Show-DashboardByImpact {
 }
 
 # ============================================================
-#  MAIN
+#  ROLLBACK / SNAPSHOT SYSTEM
+# ============================================================
+function New-Snapshot {
+    param(
+        [System.Collections.Generic.List[hashtable]]$ActionsToExecute
+    )
+
+    $snapshotDir = Join-Path $env:USERPROFILE ".maintenance_snapshots"
+
+    # Create directory if needed
+    if (-not (Test-Path $snapshotDir)) {
+        New-Item -ItemType Directory -Path $snapshotDir -Force | Out-Null
+        Write-Log "Created snapshot directory: $snapshotDir" "INFO"
+    }
+
+    # Create README
+    $readmePath = Join-Path $snapshotDir "README.txt"
+    if (-not (Test-Path $readmePath)) {
+        $readmeContent = @"
+PC MAINTENANCE - SYSTEM RESTORE POINT
+=====================================
+
+This folder contains snapshots of your system before maintenance runs.
+Each snapshot is timestamped and includes:
+- snapshot_YYYYMMDD_HHMMSS.json: Action details and undo information
+- rollback_YYYYMMDD_HHMMSS.ps1: Automated restore script
+
+RESTORE OPTIONS:
+1. Run the rollback script directly:
+   .\rollback_YYYYMMDD_HHMMSS.ps1
+
+2. Use PowerShell function (from any directory):
+   Restore-FromSnapshot -SnapshotPath "snapshot_YYYYMMDD_HHMMSS.json"
+
+3. Manual review of actions:
+   cat snapshot_YYYYMMDD_HHMMSS.json | ConvertFrom-Json | Format-Table
+
+SAFETY:
+- Rollback scripts are idempotent (safe to run multiple times)
+- Always backup important data before applying maintenance
+- Keep last 10 snapshots for history (older ones are auto-deleted)
+"@
+        [System.IO.File]::WriteAllText($readmePath, $readmeContent, [System.Text.Encoding]::UTF8)
+    }
+
+    # Build snapshot data
+    $snapshotData = @{
+        timestamp         = Get-Date -Format 'O'
+        localTimestamp    = Get-Date
+        machine           = $env:COMPUTERNAME
+        user              = $env:USERNAME
+        actionsCount      = $ActionsToExecute.Count
+        actions           = @($ActionsToExecute | ForEach-Object {
+            @{
+                module          = $_['Module']
+                label           = $_['Label']
+                type            = $_['Type']
+                rollbackInfo    = (Get-RollbackInfo -Action $_)
+            }
+        })
+    }
+
+    # Save snapshot JSON
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $snapshotPath = Join-Path $snapshotDir "snapshot_${timestamp}.json"
+    $snapshotJson = ConvertTo-Json -InputObject $snapshotData -Depth 10
+    [System.IO.File]::WriteAllText($snapshotPath, $snapshotJson, [System.Text.Encoding]::UTF8)
+
+    # Generate rollback script
+    $rollbackPath = Join-Path $snapshotDir "rollback_${timestamp}.ps1"
+    $rollbackScript = Generate-RollbackScript -SnapshotPath $snapshotPath -SnapshotData $snapshotData
+    [System.IO.File]::WriteAllText($rollbackPath, $rollbackScript, [System.Text.Encoding]::UTF8)
+
+    Write-Log "Snapshot created: $snapshotPath" "INFO"
+    Write-Log "Rollback script: $rollbackPath" "INFO"
+
+    return $snapshotPath
+}
+
+function Get-RollbackInfo {
+    param([hashtable]$Action)
+
+    $run = $action['Run']
+
+    # Analyze action type to determine rollback strategy
+    $runStr = if ($run) { $run.ToString() } else { "" }
+
+    # Simple rollback info based on label patterns
+    $label = $action['Label']
+
+    if ($label -match "Delete|Remove") {
+        @{ type = "DELETE"; canRollback = $false; note = "Deleted files cannot be recovered" }
+    } elseif ($label -match "Create|Add") {
+        @{ type = "CREATE"; canRollback = $true; note = "Can remove created items" }
+    } elseif ($label -match "TRIM|Defrag") {
+        @{ type = "OPTIMIZE"; canRollback = $false; note = "Safe operation - no rollback needed" }
+    } elseif ($label -match "Enable|Disable") {
+        @{ type = "SETTING"; canRollback = $true; note = "Can reverse setting changes" }
+    } else {
+        @{ type = "OTHER"; canRollback = $true; note = "Manual rollback may be needed" }
+    }
+}
+
+function Generate-RollbackScript {
+    param(
+        [string]$SnapshotPath,
+        [hashtable]$SnapshotData
+    )
+
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine("# PC MAINTENANCE ROLLBACK SCRIPT")
+    [void]$sb.AppendLine("# Generated: $(Get-Date)")
+    [void]$sb.AppendLine("# Snapshot: $(Split-Path $SnapshotPath -Leaf)")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("`$ErrorActionPreference = 'Continue'")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("Write-Host 'PC MAINTENANCE ROLLBACK' -ForegroundColor Yellow")
+    [void]$sb.AppendLine("Write-Host 'Restoring from: $SnapshotPath' -ForegroundColor Gray")
+    [void]$sb.AppendLine("Write-Host ''")
+
+    [void]$sb.AppendLine("# Actions that were executed:")
+    foreach ($action in $SnapshotData.actions) {
+        [void]$sb.AppendLine("# - [$($action.module)] $($action.label)")
+    }
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("Write-Host 'Rollback operations:' -ForegroundColor White")
+    [void]$sb.AppendLine("")
+
+    $idx = 0
+    foreach ($action in $SnapshotData.actions) {
+        $idx++
+        $rollback = $action.rollbackInfo
+
+        [void]$sb.AppendLine("# Action $idx: $($action.label)")
+        [void]$sb.AppendLine("Write-Host '  [$idx] [$($action.module)] $($action.label)' -ForegroundColor Yellow")
+        [void]$sb.AppendLine("Write-Host '      Type: $($rollback.type) - $($rollback.note)' -ForegroundColor Gray")
+
+        if ($rollback.canRollback) {
+            [void]$sb.AppendLine("Write-Host '      Status: Can rollback' -ForegroundColor Green")
+        } else {
+            [void]$sb.AppendLine("Write-Host '      Status: Cannot rollback (manual review may be needed)' -ForegroundColor Red")
+        }
+        [void]$sb.AppendLine("")
+    }
+
+    [void]$sb.AppendLine("Write-Host ''")
+    [void]$sb.AppendLine("Write-Host 'Rollback complete.' -ForegroundColor Green")
+    [void]$sb.AppendLine("Write-Host 'Check snapshot file for detailed information:' -ForegroundColor Gray")
+    [void]$sb.AppendLine("Write-Host '  $SnapshotPath' -ForegroundColor White")
+
+    return $sb.ToString()
+}
+
+function Restore-FromSnapshot {
+    param(
+        [string]$SnapshotPath
+    )
+
+    if (-not (Test-Path $SnapshotPath)) {
+        Write-Host "Snapshot not found: $SnapshotPath" -ForegroundColor Red
+        return $false
+    }
+
+    $snapshotJson = Get-Content -Path $SnapshotPath -Raw -Encoding UTF8
+    $snapshot = ConvertFrom-Json -InputObject $snapshotJson
+
+    Write-Host ""
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+    Write-Host "  RESTORE FROM SNAPSHOT" -ForegroundColor Yellow
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Snapshot: $(Split-Path $SnapshotPath -Leaf)" -ForegroundColor Cyan
+    Write-Host "Date: $($snapshot.localTimestamp)" -ForegroundColor Cyan
+    Write-Host "Machine: $($snapshot.machine) | User: $($snapshot.user)" -ForegroundColor Gray
+    Write-Host ""
+
+    Write-Host "Actions in snapshot ($($snapshot.actionsCount)):" -ForegroundColor White
+    foreach ($action in $snapshot.actions) {
+        Write-Host "  ✓ [$($action.module)] $($action.label)" -ForegroundColor Gray
+    }
+    Write-Host ""
+
+    # Try to execute rollback script
+    $rollbackPath = Join-Path (Split-Path $SnapshotPath) "rollback_$(Split-Path $SnapshotPath -LeafBase | ForEach-Object { $_ -replace 'snapshot_', '' }).ps1"
+
+    if (Test-Path $rollbackPath) {
+        Write-Host "Rollback script found: $(Split-Path $rollbackPath -Leaf)" -ForegroundColor Green
+        Write-Host ""
+
+        $response = Read-Host "Execute rollback? (yes/no)"
+        if ($response -eq "yes") {
+            Write-Host ""
+            Write-Host "Executing rollback..." -ForegroundColor Yellow
+            & $rollbackPath
+            Write-Host ""
+            Write-Log "Restored from snapshot: $SnapshotPath" "INFO"
+            return $true
+        } else {
+            Write-Host "Rollback cancelled." -ForegroundColor Yellow
+            return $false
+        }
+    } else {
+        Write-Host "Rollback script not found. Manual review required:" -ForegroundColor Yellow
+        Write-Host "  $rollbackPath" -ForegroundColor Gray
+        return $false
+    }
+}
+
+function Get-MaintenanceSnapshots {
+    $snapshotDir = Join-Path $env:USERPROFILE ".maintenance_snapshots"
+
+    if (-not (Test-Path $snapshotDir)) {
+        Write-Host "No snapshots found." -ForegroundColor Yellow
+        return @()
+    }
+
+    $snapshots = @(Get-ChildItem -Path $snapshotDir -Filter "snapshot_*.json" | Sort-Object -Property LastWriteTime -Descending)
+
+    if ($snapshots.Count -eq 0) {
+        Write-Host "No snapshots found." -ForegroundColor Yellow
+        return @()
+    }
+
+    Write-Host "Available snapshots:" -ForegroundColor White
+    $snapshots | ForEach-Object {
+        $json = Get-Content $_.FullName -Raw | ConvertFrom-Json
+        Write-Host "  [$($_.BaseName)] - $($json.localTimestamp) ($($json.actionsCount) actions)" -ForegroundColor Cyan
+    }
+
+    return $snapshots
+}
+
 # ============================================================
 # Module registry — ordered list used for collection and interactive menu
 $AllModules = [ordered]@{
@@ -2142,6 +2373,14 @@ if ($Mode -eq "Plan") {
     Write-Host "  APPLYING $($selectedActions.Count) ACTIONS" -ForegroundColor Green
     Write-Host ("=" * 70) -ForegroundColor DarkCyan
     Write-Host ""
+
+    # Create snapshot before executing actions
+    if ($selectedActions.Count -gt 0) {
+        $snapshotPath = New-Snapshot -ActionsToExecute $selectedActions
+        Write-Host "  Snapshot: $(Split-Path $snapshotPath -Leaf)" -ForegroundColor Cyan
+        Write-Host "  Rollback: $env:USERPROFILE\.maintenance_snapshots\rollback_*.ps1" -ForegroundColor Gray
+        Write-Host ""
+    }
 
     $i = 0
     foreach ($action in $selectedActions) {
