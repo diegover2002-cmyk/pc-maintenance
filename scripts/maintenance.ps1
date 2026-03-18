@@ -1686,10 +1686,23 @@ function Collect-AdvancedFileAnalysisActions {
 # ============================================================
 #  REPORT GENERATOR
 # ============================================================
-function Export-Report([string]$Phase) {
+function Export-Report([string]$Phase, [string]$Format = "Text") {
     $auto   = @($script:Registry | Where-Object { $_['Type'] -eq "AUTO" })
     $manual = @($script:Registry | Where-Object { $_['Type'] -eq "MANUAL" })
     $bytes  = [long]($auto | ForEach-Object { $_['Bytes'] } | Measure-Object -Sum).Sum
+
+    if ($Format -eq "HTML") {
+        return Export-ReportHTML -Phase $Phase -Bytes $bytes
+    } elseif ($Format -eq "JSON") {
+        return Export-ReportJSON -Phase $Phase -Bytes $bytes
+    } else {
+        return Export-ReportText -Phase $Phase -Bytes $bytes
+    }
+}
+
+function Export-ReportText([string]$Phase, [long]$Bytes) {
+    $auto   = @($script:Registry | Where-Object { $_['Type'] -eq "AUTO" })
+    $manual = @($script:Registry | Where-Object { $_['Type'] -eq "MANUAL" })
 
     $sb = [System.Text.StringBuilder]::new()
     [void]$sb.AppendLine("PC MAINTENANCE REPORT - $Phase")
@@ -1701,7 +1714,7 @@ function Export-Report([string]$Phase) {
     [void]$sb.AppendLine("  Mode               : $Phase")
     [void]$sb.AppendLine("  Auto actions       : $($auto.Count)")
     [void]$sb.AppendLine("  Manual items       : $($manual.Count)")
-    [void]$sb.AppendLine("  Space freed/saved  : $(Format-Bytes $bytes)")
+    [void]$sb.AppendLine("  Space freed/saved  : $(Format-Bytes $Bytes)")
     [void]$sb.AppendLine("")
 
     # Group by module
@@ -1731,6 +1744,81 @@ function Export-Report([string]$Phase) {
 
     [System.IO.File]::WriteAllText($rPath,   $content, [System.Text.Encoding]::UTF8)
     [System.IO.File]::WriteAllText($desktop, $content, [System.Text.Encoding]::UTF8)
+
+    return $rPath
+}
+
+function Export-ReportHTML([string]$Phase, [long]$Bytes) {
+    $templatePath = Join-Path $PSScriptRoot "..\templates\report-template.html"
+    if (-not (Test-Path $templatePath)) {
+        Write-Host "  [WARN] HTML template not found at $templatePath, skipping HTML generation" -ForegroundColor Yellow
+        return ""
+    }
+
+    # Build report data object
+    $reportData = @{
+        timestamp = (Get-Date -Format 'O')
+        phase     = $Phase
+        machine   = $env:COMPUTERNAME
+        user      = $env:USERNAME
+        bytesTotal = $Bytes
+        allActions = @($script:Registry | ForEach-Object {
+            @{
+                module = $_['Module']
+                label  = $_['Label']
+                type   = $_['Type']
+                detail = $_['Detail']
+                bytes  = $_['Bytes']
+                ok     = $_['OK']
+                output = $_['Output']
+            }
+        })
+    }
+
+    # Convert to JSON
+    $jsonData = ConvertTo-Json -InputObject $reportData -Depth 10
+    $jsonData = $jsonData -replace "\`"", "\`"\`""
+
+    # Read template
+    $template = Get-Content -Path $templatePath -Raw -Encoding UTF8
+
+    # Replace placeholder with actual data
+    $htmlContent = $template -replace "<!--REPORT_DATA_PLACEHOLDER-->", $jsonData
+
+    # Write files
+    $rPath   = Join-Path $Cfg.ReportDir "report_${Phase}_${Timestamp}.html"
+    $desktop = "$env:USERPROFILE\Desktop\PC_Maintenance_Report.html"
+
+    [System.IO.File]::WriteAllText($rPath,   $htmlContent, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($desktop, $htmlContent, [System.Text.Encoding]::UTF8)
+
+    return $rPath
+}
+
+function Export-ReportJSON([string]$Phase, [long]$Bytes) {
+    $reportData = @{
+        timestamp = (Get-Date -Format 'O')
+        phase     = $Phase
+        machine   = $env:COMPUTERNAME
+        user      = $env:USERNAME
+        bytesTotal = $Bytes
+        allActions = @($script:Registry | ForEach-Object {
+            @{
+                module = $_['Module']
+                label  = $_['Label']
+                type   = $_['Type']
+                detail = $_['Detail']
+                bytes  = $_['Bytes']
+                ok     = $_['OK']
+                output = $_['Output']
+            }
+        })
+    }
+
+    $jsonContent = ConvertTo-Json -InputObject $reportData -Depth 10
+
+    $rPath = Join-Path $Cfg.ReportDir "report_${Phase}_${Timestamp}.json"
+    [System.IO.File]::WriteAllText($rPath, $jsonContent, [System.Text.Encoding]::UTF8)
 
     return $rPath
 }
@@ -1822,9 +1910,15 @@ $script:Registry | Group-Object { $_['Module'] } | Sort-Object Name | ForEach-Ob
 }
 Write-Host ""
 
-$rPath = Export-Report -Phase $Mode
-Write-Log "Report exported: $rPath" "OK"
-Write-Host "  Report: $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor DarkGray
+# Generate reports in all formats
+$rPathText = Export-Report -Phase $Mode -Format "Text"
+$rPathHTML = Export-Report -Phase $Mode -Format "HTML"
+$rPathJSON = Export-Report -Phase $Mode -Format "JSON"
+
+Write-Log "Report exported: $rPathText (+ HTML and JSON)" "OK"
+Write-Host "  📄 Text:  $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor DarkGray
+Write-Host "  🌐 HTML:  $env:USERPROFILE\Desktop\PC_Maintenance_Report.html" -ForegroundColor DarkGray
+Write-Host "  📋 JSON:  $rPathJSON" -ForegroundColor DarkGray
 Write-Host ""
 
 if ($Mode -eq "Plan") {
@@ -1863,7 +1957,11 @@ if ($Mode -eq "Plan") {
         }
     }
 
-    $rPath   = Export-Report -Phase "Apply_Results"
+    # Generate reports in all formats
+    $rNameText = Export-Report -Phase "Apply_Results" -Format "Text"
+    $rNameHTML = Export-Report -Phase "Apply_Results" -Format "HTML"
+    $rNameJSON = Export-Report -Phase "Apply_Results" -Format "JSON"
+
     $success = @($autoList | Where-Object { $_['OK'] -eq $true }).Count
     $failed  = @($autoList | Where-Object { $_['OK'] -eq $false }).Count
 
@@ -1875,7 +1973,8 @@ if ($Mode -eq "Plan") {
     Write-Host "  Succeeded : $success" -ForegroundColor Green
     if ($failed -gt 0) { Write-Host "  Failed    : $failed" -ForegroundColor Red }
     Write-Host "  Log file  : $LogFile" -ForegroundColor DarkGray
-    Write-Host "  Report    : $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor Cyan
+    Write-Host "  📄 Text:   $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor Cyan
+    Write-Host "  🌐 HTML:   $env:USERPROFILE\Desktop\PC_Maintenance_Report.html" -ForegroundColor Cyan
     Write-Host ""
 
     if ($manualList.Count -gt 0) {
