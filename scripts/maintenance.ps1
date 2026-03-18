@@ -199,9 +199,11 @@ function Get-ZoneIdentifierSafe([string]$FilePath) {
             -1 = "Unknown"
         }
 
+        $zoneLabel = if ($zoneMap.ContainsKey($zone)) { $zoneMap[$zone] } else { $zoneMap[-1] }
+
         return @{
             Zone       = $zone
-            ZoneName   = $zoneMap[if ($zone -in $zoneMap.Keys) { $zone } else { -1 }]
+            ZoneName   = $zoneLabel
             IsInternet = ($zone -eq 3)
             IsRestricted = ($zone -eq 4)
             Risky      = ($zone -in @(3, 4))
