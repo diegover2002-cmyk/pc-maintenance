@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Pester test suite**: comprehensive tests for syntax validation, function availability, and configuration checking
+- **Report rotation**: old reports (older than 30 days) are now automatically deleted, just like logs
+
+### Improved
+- README now documents the `tests/` directory structure
+- Better CI/CD integration with working Pester tests in `test.yml`
+
+---
+
+## [3.0.0] - 2026-03-18
+
+### Added
+- **Interactive module selector** (`-Interactive` flag): shows a numbered menu before running so
+  the user can choose which modules to execute
+- **DOCUMENTS AUDIT module**: three-layer analysis — file audit by extension, semantic
+  classification by filename (Spanish + English patterns), and content-based classification
+  (reads text inside PDFs, DOCX, TXT, CSV). Auto-organizes personal documents into
+  `Documents\<Category>` subfolders; destructive operations are always MANUAL
+- **NETWORK module**: lists active adapters with IP/gateway/DNS, pings Google DNS / Cloudflare /
+  Quad9 and flags high latency (> 100 ms) or unreachable hosts
+- **TEMPERATURE module**: reads CPU thermal zones via ACPI (`MSAcpi_ThermalZoneTemperature`)
+  without third-party tools; warns at 75 °C, critical at 90 °C; notes if
+  LibreHardwareMonitor is absent for GPU temperatures
+- **TOP PROCESSES module**: shows top 5 processes by CPU time and by RAM usage; registers a
+  MANUAL action for any process consuming more than 2 GB of RAM
+- `$AllModules` ordered hashtable in Main to drive both sequential collection and the
+  interactive menu from a single source of truth
+
+### Changed
+- Main collection loop replaced with `foreach ($modName in $selectedModules)` to support
+  module selection; all eleven modules are selected by default
+
 ---
 
 ## [2.1.0] - 2026-03-17
@@ -85,7 +118,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Weekly scheduled task via `setup.ps1` (every Sunday 10:00 AM, runs as SYSTEM)
 - Timestamped log files with 30-day auto-rotation
 
-[Unreleased]: https://github.com/diegover2002-cmyk/pc-maintenance/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/diegover2002-cmyk/pc-maintenance/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/diegover2002-cmyk/pc-maintenance/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/diegover2002-cmyk/pc-maintenance/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/diegover2002-cmyk/pc-maintenance/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/diegover2002-cmyk/pc-maintenance/compare/v1.0.0...v2.0.0

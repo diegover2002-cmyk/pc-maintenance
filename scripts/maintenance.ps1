@@ -354,6 +354,15 @@ function Collect-CleanupActions {
         Register-Action "Cleanup" "AUTO" "Rotate old logs" `
             -Run { $oldLogs | Remove-Item -Force -ErrorAction SilentlyContinue }.GetNewClosure()
     }
+
+    # Old report rotation
+    $oldReports = @(Get-ChildItem $Cfg.ReportDir -Filter "report_*.txt" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$Cfg.LogRotateDays) })
+    if ($oldReports.Count -gt 0) {
+        Write-PlanLine "Delete $($oldReports.Count) report(s) older than $($Cfg.LogRotateDays) days" "DEL"
+        Register-Action "Cleanup" "AUTO" "Rotate old reports" `
+            -Run { $oldReports | Remove-Item -Force -ErrorAction SilentlyContinue }.GetNewClosure()
+    }
 }
 
 # ============================================================

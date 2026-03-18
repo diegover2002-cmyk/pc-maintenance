@@ -14,8 +14,12 @@ run once to see *exactly* what would change, then run again to apply it.
 | 3 | **Startup Programs** | Classifies startup entries by category, auto-disables known non-essential ones, flags unknowns |
 | 4 | **File Analysis** | Desktop clutter, Downloads age/size audit, large file warnings, MD5 duplicate detection |
 | 5 | **Disk** | Free space on all fixed drives (warns below threshold), TRIM on SSDs |
-| 6 | **Drivers** | Detects devices with driver errors via `ConfigManagerErrorCode` |
-| 7 | **Backup** | Checks last-modified date on Documents & Desktop, reminds you to back up |
+| 6 | **Documents** | File audit by extension, semantic classification by filename, content-based classification; auto-organizes personal documents into subfolders |
+| 7 | **Drivers** | Detects devices with driver errors via `ConfigManagerErrorCode` |
+| 8 | **Backup** | Checks last-modified date on Documents & Desktop, reminds you to back up |
+| 9 | **Network** | Active adapters with IP/DNS info, connectivity check (Google/Cloudflare/Quad9), latency warning |
+| 10 | **Temperature** | CPU thermal zones via ACPI, warns at 75 °C and 90 °C |
+| 11 | **Processes** | Top 5 processes by CPU and RAM, flags processes using more than 2 GB |
 
 All actions are classified as `AUTO` (safe to apply automatically) or `MANUAL` (requires human decision).
 
@@ -99,6 +103,10 @@ Re-run `.\setup.ps1` to apply schedule changes.
 ```
 pc-maintenance/
 ├── .github/
+│   ├── workflows/
+│   │   ├── release.yml       <- creates a GitHub Release on version tags
+│   │   ├── test.yml          <- runs Pester tests on push
+│   │   └── validate.yml      <- lints the script on PRs
 │   ├── ISSUE_TEMPLATE/
 │   │   ├── bug_report.md
 │   │   └── feature_request.md
@@ -106,6 +114,9 @@ pc-maintenance/
 ├── scripts/
 │   ├── maintenance.ps1   <- main script (all modules)
 │   └── setup.ps1         <- registers the scheduled task (run once)
+├── tests/
+│   └── maintenance.tests.ps1 <- Pester test suite
+├── wiki/                 <- offline documentation (mirrors the GitHub Wiki)
 ├── logs/                 <- auto-created, gitignored
 ├── reports/              <- auto-created, gitignored
 ├── CHANGELOG.md
