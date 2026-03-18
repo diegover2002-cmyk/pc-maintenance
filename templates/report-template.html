@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PC Maintenance Report</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 0.95em;
+            opacity: 0.95;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            padding: 30px 40px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .summary-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        }
+
+        .summary-card.auto {
+            border-left-color: #28a745;
+        }
+
+        .summary-card.manual {
+            border-left-color: #ffc107;
+        }
+
+        .summary-card.failed {
+            border-left-color: #dc3545;
+        }
+
+        .summary-label {
+            font-size: 0.85em;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+
+        .summary-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #212529;
+        }
+
+        .controls {
+            padding: 30px 40px;
+            background: white;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .search-box {
+            flex: 1;
+            min-width: 250px;
+            position: relative;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 10px 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            font-size: 0.95em;
+            transition: border-color 0.3s;
+        }
+
+        .search-box input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .filter-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        .filter-group select {
+            padding: 10px 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            font-size: 0.95em;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+
+        .filter-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button.export-btn {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.95em;
+            transition: background 0.3s;
+        }
+
+        button.export-btn:hover {
+            background: #764ba2;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .module-section {
+            margin-bottom: 30px;
+        }
+
+        .module-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e9ecef;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .module-header:hover {
+            color: #667eea;
+        }
+
+        .module-toggle {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            line-height: 20px;
+            text-align: center;
+            transition: transform 0.3s;
+        }
+
+        .module-header.collapsed .module-toggle {
+            transform: rotate(-90deg);
+        }
+
+        .module-header h2 {
+            font-size: 1.3em;
+            color: #212529;
+        }
+
+        .module-count {
+            margin-left: auto;
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+
+        .module-content {
+            display: none;
+        }
+
+        .module-header:not(.collapsed)~.module-content {
+            display: block;
+        }
+
+        .action-row {
+            display: grid;
+            grid-template-columns: 80px 1fr 80px 100px 200px;
+            gap: 15px;
+            padding: 15px;
+            margin-bottom: 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border-left: 4px solid #e9ecef;
+            align-items: start;
+        }
+
+        .action-row.auto {
+            background: #f1f5f9;
+            border-left-color: #28a745;
+        }
+
+        .action-row.manual {
+            background: #fff8f0;
+            border-left-color: #ffc107;
+        }
+
+        .action-row.failed {
+            background: #fef5f5;
+            border-left-color: #dc3545;
+        }
+
+        .action-badge {
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: bold;
+            text-align: center;
+            text-transform: uppercase;
+        }
+
+        .action-badge.auto {
+            background: #28a745;
+            color: white;
+        }
+
+        .action-badge.manual {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .action-badge.failed {
+            background: #dc3545;
+            color: white;
+        }
+
+        .action-status {
+            font-weight: bold;
+            text-align: center;
+        }
+
+        .action-status.ok {
+            color: #28a745;
+        }
+
+        .action-status.failed {
+            color: #dc3545;
+        }
+
+        .action-status.pending {
+            color: #6c757d;
+        }
+
+        .action-detail {
+            font-size: 0.85em;
+            color: #6c757d;
+            word-break: break-word;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+
+        .footer {
+            padding: 20px 40px;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+            text-align: right;
+            color: #6c757d;
+            font-size: 0.85em;
+        }
+
+        @media (max-width: 768px) {
+            .action-row {
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+
+            .summary {
+                grid-template-columns: 1fr;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .filter-group {
+                flex-direction: column;
+            }
+
+            .filter-group select {
+                width: 100%;
+            }
+
+            button.export-btn {
+                width: 100%;
+            }
+        }
+
+        @print {
+            body {
+                background: white;
+            }
+
+            .container {
+                box-shadow: none;
+                border-radius: 0;
+            }
+
+            .controls {
+                display: none;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🖥️ PC Maintenance Report</h1>
+            <p id="reportDate" style="margin-top: 10px;">Report generated on <span id="dateTime"></span></p>
+            <p id="machine" style="margin-top: 5px; opacity: 0.8;"></p>
+        </div>
+
+        <div class="summary" id="summarySection">
+            <!-- Populated by JavaScript -->
+        </div>
+
+        <div class="controls">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Search actions...">
+            </div>
+            <div class="filter-group">
+                <select id="moduleFilter">
+                    <option value="">All Modules</option>
+                    <!-- Populated by JavaScript -->
+                </select>
+                <select id="typeFilter">
+                    <option value="">All Types</option>
+                    <option value="AUTO">Auto-fixable (AUTO)</option>
+                    <option value="MANUAL">Manual (MANUAL)</option>
+                </select>
+                <select id="statusFilter">
+                    <option value="">All Status</option>
+                    <option value="OK">OK</option>
+                    <option value="FAILED">Failed</option>
+                    <option value="PENDING">Pending</option>
+                </select>
+            </div>
+            <button class="export-btn" onclick="exportToCSV()">📥 CSV</button>
+            <button class="export-btn" onclick="exportToJSON()">📋 JSON</button>
+            <button class="export-btn" onclick="window.print()">🖨️ Print</button>
+        </div>
+
+        <div class="content" id="actionsContainer">
+            <!-- Populated by JavaScript -->
+        </div>
+
+        <div class="footer">
+            <p>PC Maintenance Report | All times in local timezone</p>
+        </div>
+    </div>
+
+    <script>
+        // Global data storage
+        let allActions = [];
+        let reportData = {};
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function () {
+            // Extract embedded data from page
+            const dataScript = document.getElementById('report-data');
+            if (dataScript) {
+                reportData = JSON.parse(dataScript.textContent);
+                allActions = reportData.allActions || [];
+
+                // Populate header
+                document.getElementById('dateTime').textContent = new Date(reportData.timestamp).toLocaleString();
+                document.getElementById('machine').textContent = `Machine: ${reportData.machine} | User: ${reportData.user}`;
+
+                // Populate summary
+                populateSummary();
+
+                // Populate filters
+                populateFilters();
+
+                // Render actions
+                renderActions();
+
+                // Setup event listeners
+                setupEventListeners();
+            }
+        });
+
+        function populateSummary() {
+            const auto = allActions.filter(a => a.type === 'AUTO').length;
+            const manual = allActions.filter(a => a.type === 'MANUAL').length;
+            const ok = allActions.filter(a => a.ok === true).length;
+            const failed = allActions.filter(a => a.ok === false).length;
+            const bytes = allActions.reduce((sum, a) => sum + (a.bytes || 0), 0);
+
+            const summary = document.getElementById('summarySection');
+            summary.innerHTML = `
+                <div class="summary-card auto">
+                    <div class="summary-label">Auto-fixable</div>
+                    <div class="summary-value">${auto}</div>
+                </div>
+                <div class="summary-card manual">
+                    <div class="summary-label">Manual Items</div>
+                    <div class="summary-value">${manual}</div>
+                </div>
+                <div class="summary-card auto">
+                    <div class="summary-label">Completed (OK)</div>
+                    <div class="summary-value">${ok}</div>
+                </div>
+                <div class="summary-card failed">
+                    <div class="summary-label">Failed</div>
+                    <div class="summary-value">${failed}</div>
+                </div>
+                <div class="summary-card auto">
+                    <div class="summary-label">Space Saved</div>
+                    <div class="summary-value">${formatBytes(bytes)}</div>
+                </div>
+            `;
+        }
+
+        function populateFilters() {
+            const modules = [...new Set(allActions.map(a => a.module))].sort();
+            const moduleFilter = document.getElementById('moduleFilter');
+
+            modules.forEach(module => {
+                const option = document.createElement('option');
+                option.value = module;
+                option.textContent = module;
+                moduleFilter.appendChild(option);
+            });
+        }
+
+        function renderActions() {
+            const container = document.getElementById('actionsContainer');
+
+            if (allActions.length === 0) {
+                container.innerHTML = '<div class="empty-state">No actions found.</div>';
+                return;
+            }
+
+            const byModule = {};
+            allActions.forEach(action => {
+                if (!byModule[action.module]) {
+                    byModule[action.module] = [];
+                }
+                byModule[action.module].push(action);
+            });
+
+            let html = '';
+            Object.keys(byModule).sort().forEach(module => {
+                const actions = byModule[module];
+                html += `
+                    <div class="module-section">
+                        <div class="module-header" onclick="toggleModule(this)">
+                            <span class="module-toggle">▶</span>
+                            <h2>${module}</h2>
+                            <span class="module-count">${actions.length}</span>
+                        </div>
+                        <div class="module-content">
+                            ${actions.map(action => renderActionRow(action)).join('')}
+                        </div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        function renderActionRow(action) {
+            const status = action.ok === true ? 'ok' : action.ok === false ? 'failed' : 'pending';
+            const statusText = action.ok === true ? '✓ OK' : action.ok === false ? '✗ FAILED' : '⏳ Pending';
+
+            return `
+                <div class="action-row ${action.type.toLowerCase()}" data-module="${action.module}" data-type="${action.type}" data-status="${status}">
+                    <div class="action-badge ${action.type.toLowerCase()}">${action.type}</div>
+                    <div><strong>${action.label}</strong><div class="action-detail">${action.detail || ''}</div></div>
+                    <div>${action.bytes ? formatBytes(action.bytes) : '-'}</div>
+                    <div class="action-status ${status}">${statusText}</div>
+                    <div class="action-detail">${action.output || ''}</div>
+                </div>
+            `;
+        }
+
+        function toggleModule(header) {
+            header.classList.toggle('collapsed');
+        }
+
+        function setupEventListeners() {
+            document.getElementById('searchInput').addEventListener('input', filterActions);
+            document.getElementById('moduleFilter').addEventListener('change', filterActions);
+            document.getElementById('typeFilter').addEventListener('change', filterActions);
+            document.getElementById('statusFilter').addEventListener('change', filterActions);
+        }
+
+        function filterActions() {
+            const search = document.getElementById('searchInput').value.toLowerCase();
+            const module = document.getElementById('moduleFilter').value;
+            const type = document.getElementById('typeFilter').value;
+            const status = document.getElementById('statusFilter').value;
+
+            const rows = document.querySelectorAll('.action-row');
+            let visibleCount = 0;
+
+            rows.forEach(row => {
+                const label = row.querySelector('strong').textContent.toLowerCase();
+                const rowModule = row.dataset.module;
+                const rowType = row.dataset.type;
+                const rowStatus = row.dataset.status;
+
+                const matchSearch = label.includes(search);
+                const matchModule = !module || rowModule === module;
+                const matchType = !type || rowType === type;
+                const matchStatus = !status || rowStatus === status;
+
+                if (matchSearch && matchModule && matchType && matchStatus) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+
+            // Update empty state
+            if (visibleCount === 0) {
+                const container = document.getElementById('actionsContainer');
+                if (!container.querySelector('.empty-state')) {
+                    container.innerHTML += '<div class="empty-state">No actions match your filters.</div>';
+                }
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        function exportToCSV() {
+            let csv = 'Module,Action,Type,Status,Detail,Bytes\n';
+            allActions.forEach(action => {
+                const status = action.ok === true ? 'OK' : action.ok === false ? 'FAILED' : 'PENDING';
+                csv += `"${action.module}","${action.label}","${action.type}","${status}","${(action.detail || '').replace(/"/g, '""')}","${action.bytes || 0}"\n`;
+            });
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `PC_Maintenance_Report_${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+        }
+
+        function exportToJSON() {
+            const dataStr = JSON.stringify(reportData, null, 2);
+            const blob = new Blob([dataStr], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `PC_Maintenance_Report_${new Date().toISOString().split('T')[0]}.json`;
+            a.click();
+        }
+    </script>
+
+    <!-- Embedded report data - populated by PowerShell -->
+    <script id="report-data" type="application/json">
+    <!--REPORT_DATA_PLACEHOLDER-->
+    </script>
+</body>
+
+</html>

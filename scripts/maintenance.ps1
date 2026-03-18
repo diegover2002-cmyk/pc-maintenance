@@ -457,19 +457,25 @@ function Register-Action {
         [ValidateSet("AUTO","MANUAL")]
         [string]$Type,
         [string]$Label,
-        [string]$Detail      = "",
-        [long]  $Bytes       = 0,
-        [scriptblock]$Run    = {}
+        [string]$Detail         = "",
+        [long]  $Bytes          = 0,
+        [scriptblock]$Run       = {},
+        [string]$ImpactLevel    = "Low",      # Dashboard: Low, Medium, High
+        [int]   $RiskFactor     = 0,          # Dashboard: 0-100
+        [int]   $EstimatedSecs  = 5           # Dashboard: estimated execution time
     )
     $script:Registry.Add(@{
-        Module = $Module
-        Type   = $Type
-        Label  = $Label
-        Detail = $Detail
-        Bytes  = $Bytes
-        Run    = $Run
-        OK     = $null
-        Output = ""
+        Module          = $Module
+        Type            = $Type
+        Label           = $Label
+        Detail          = $Detail
+        Bytes           = $Bytes
+        Run             = $Run
+        OK              = $null
+        Output          = ""
+        ImpactLevel     = $ImpactLevel
+        RiskFactor      = $RiskFactor
+        EstimatedSecs   = $EstimatedSecs
     })
 }
 
@@ -1686,10 +1692,23 @@ function Collect-AdvancedFileAnalysisActions {
 # ============================================================
 #  REPORT GENERATOR
 # ============================================================
-function Export-Report([string]$Phase) {
+function Export-Report([string]$Phase, [string]$Format = "Text") {
     $auto   = @($script:Registry | Where-Object { $_['Type'] -eq "AUTO" })
     $manual = @($script:Registry | Where-Object { $_['Type'] -eq "MANUAL" })
     $bytes  = [long]($auto | ForEach-Object { $_['Bytes'] } | Measure-Object -Sum).Sum
+
+    if ($Format -eq "HTML") {
+        return Export-ReportHTML -Phase $Phase -Bytes $bytes
+    } elseif ($Format -eq "JSON") {
+        return Export-ReportJSON -Phase $Phase -Bytes $bytes
+    } else {
+        return Export-ReportText -Phase $Phase -Bytes $bytes
+    }
+}
+
+function Export-ReportText([string]$Phase, [long]$Bytes) {
+    $auto   = @($script:Registry | Where-Object { $_['Type'] -eq "AUTO" })
+    $manual = @($script:Registry | Where-Object { $_['Type'] -eq "MANUAL" })
 
     $sb = [System.Text.StringBuilder]::new()
     [void]$sb.AppendLine("PC MAINTENANCE REPORT - $Phase")
@@ -1701,7 +1720,7 @@ function Export-Report([string]$Phase) {
     [void]$sb.AppendLine("  Mode               : $Phase")
     [void]$sb.AppendLine("  Auto actions       : $($auto.Count)")
     [void]$sb.AppendLine("  Manual items       : $($manual.Count)")
-    [void]$sb.AppendLine("  Space freed/saved  : $(Format-Bytes $bytes)")
+    [void]$sb.AppendLine("  Space freed/saved  : $(Format-Bytes $Bytes)")
     [void]$sb.AppendLine("")
 
     # Group by module
@@ -1735,8 +1754,506 @@ function Export-Report([string]$Phase) {
     return $rPath
 }
 
+function Export-ReportHTML([string]$Phase, [long]$Bytes) {
+    $templatePath = Join-Path $PSScriptRoot "..\templates\report-template.html"
+    if (-not (Test-Path $templatePath)) {
+        Write-Host "  [WARN] HTML template not found at $templatePath, skipping HTML generation" -ForegroundColor Yellow
+        return ""
+    }
+
+    # Build report data object
+    $reportData = @{
+        timestamp = (Get-Date -Format 'O')
+        phase     = $Phase
+        machine   = $env:COMPUTERNAME
+        user      = $env:USERNAME
+        bytesTotal = $Bytes
+        allActions = @($script:Registry | ForEach-Object {
+            @{
+                module = $_['Module']
+                label  = $_['Label']
+                type   = $_['Type']
+                detail = $_['Detail']
+                bytes  = $_['Bytes']
+                ok     = $_['OK']
+                output = $_['Output']
+            }
+        })
+    }
+
+    # Convert to JSON
+    $jsonData = ConvertTo-Json -InputObject $reportData -Depth 10
+    $jsonData = $jsonData -replace "\`"", "\`"\`""
+
+    # Read template
+    $template = Get-Content -Path $templatePath -Raw -Encoding UTF8
+
+    # Replace placeholder with actual data
+    $htmlContent = $template -replace "<!--REPORT_DATA_PLACEHOLDER-->", $jsonData
+
+    # Write files
+    $rPath   = Join-Path $Cfg.ReportDir "report_${Phase}_${Timestamp}.html"
+    $desktop = "$env:USERPROFILE\Desktop\PC_Maintenance_Report.html"
+
+    [System.IO.File]::WriteAllText($rPath,   $htmlContent, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($desktop, $htmlContent, [System.Text.Encoding]::UTF8)
+
+    return $rPath
+}
+
+function Export-ReportJSON([string]$Phase, [long]$Bytes) {
+    $reportData = @{
+        timestamp = (Get-Date -Format 'O')
+        phase     = $Phase
+        machine   = $env:COMPUTERNAME
+        user      = $env:USERNAME
+        bytesTotal = $Bytes
+        allActions = @($script:Registry | ForEach-Object {
+            @{
+                module = $_['Module']
+                label  = $_['Label']
+                type   = $_['Type']
+                detail = $_['Detail']
+                bytes  = $_['Bytes']
+                ok     = $_['OK']
+                output = $_['Output']
+            }
+        })
+    }
+
+    $jsonContent = ConvertTo-Json -InputObject $reportData -Depth 10
+
+    $rPath = Join-Path $Cfg.ReportDir "report_${Phase}_${Timestamp}.json"
+    [System.IO.File]::WriteAllText($rPath, $jsonContent, [System.Text.Encoding]::UTF8)
+
+    return $rPath
+}
+
 # ============================================================
-#  MAIN
+#  DASHBOARD - INTERACTIVE ACTION PREVIEW
+# ============================================================
+function Show-Dashboard {
+    param(
+        [System.Collections.Generic.List[hashtable]]$AutoActions,
+        [System.Collections.Generic.List[hashtable]]$ManualActions
+    )
+
+    $allCount = $AutoActions.Count + $ManualActions.Count
+    if ($allCount -eq 0) {
+        Write-Host "  No actions to review." -ForegroundColor Green
+        return $AutoActions
+    }
+
+    # Calculate total estimated time
+    $totalSecs = ($AutoActions | ForEach-Object { $_['EstimatedSecs'] } | Measure-Object -Sum).Sum
+    $totalMins = [math]::Ceiling($totalSecs / 60)
+
+    Write-Host ""
+    Write-Host ("=" * 70) -ForegroundColor Cyan
+    Write-Host "  INTERACTIVE DASHBOARD" -ForegroundColor Cyan
+    Write-Host ("=" * 70) -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Summary:" -ForegroundColor White
+    Write-Host "    Total actions: $allCount" -ForegroundColor Gray
+    Write-Host "    Auto-fixable: $($AutoActions.Count)" -ForegroundColor Green
+    Write-Host "    Manual items: $($ManualActions.Count)" -ForegroundColor Yellow
+    Write-Host "    Estimated time: ~$totalMins minute(s)" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Group by module with impact visualization
+    $modules = @()
+    $byModule = @{}
+    $AutoActions | ForEach-Object {
+        $mod = $_['Module']
+        if (-not $byModule[$mod]) { $byModule[$mod] = @() }
+        $byModule[$mod] += $_
+        if ($mod -notin $modules) { $modules += $mod }
+    }
+
+    Write-Host "  Actions by module:" -ForegroundColor White
+    $modules | Sort-Object | ForEach-Object {
+        $actions = $byModule[$_]
+        $count = $actions.Count
+        $impact = ($actions | Group-Object -Property ImpactLevel | Sort-Object -Property Name -Descending)[0].Name
+        $bar = if ($count -ge 5) { "█████" } elseif ($count -ge 3) { "███" } elseif ($count -ge 1) { "██" } else { "█" }
+        Write-Host "    ✓ $_ ($count)" -ForegroundColor Cyan -NoNewline
+        Write-Host "  [$bar]  Impact: $impact" -ForegroundColor White
+    }
+    Write-Host ""
+
+    # Menu
+    Write-Host "  What would you like to do?" -ForegroundColor White
+    Write-Host ""
+    Write-Host "    [1] Execute ALL auto-fixable actions" -ForegroundColor Green
+    Write-Host "    [2] Review actions by module first" -ForegroundColor Yellow
+    Write-Host "    [3] Review by impact level" -ForegroundColor Yellow
+    Write-Host "    [4] Cancel (no changes)" -ForegroundColor Red
+    Write-Host ""
+
+    $choice = Read-Host "  Enter choice (1-4)"
+
+    switch ($choice.Trim()) {
+        "1" {
+            Write-Host ""
+            Write-Host "  Proceeding with all $($AutoActions.Count) auto-fixable actions..." -ForegroundColor Green
+            Write-Host ""
+            return $AutoActions
+        }
+        "2" {
+            return Show-DashboardByModule -AutoActions $AutoActions
+        }
+        "3" {
+            return Show-DashboardByImpact -AutoActions $AutoActions
+        }
+        "4" {
+            Write-Host ""
+            Write-Host "  Cancelled. No changes will be made." -ForegroundColor Yellow
+            Write-Host ""
+            exit 0
+        }
+        default {
+            Write-Host ""
+            Write-Host "  Invalid choice. Proceeding with all actions..." -ForegroundColor Yellow
+            return $AutoActions
+        }
+    }
+}
+
+function Show-DashboardByModule {
+    param([System.Collections.Generic.List[hashtable]]$AutoActions)
+
+    $byModule = @{}
+    $AutoActions | ForEach-Object {
+        $mod = $_['Module']
+        if (-not $byModule[$mod]) { $byModule[$mod] = @() }
+        $byModule[$mod] += $_
+    }
+
+    Write-Host ""
+    Write-Host "  Select modules to execute:" -ForegroundColor White
+    $modules = @($byModule.Keys | Sort-Object)
+
+    $idx = 0
+    $modules | ForEach-Object {
+        $idx++
+        $count = $byModule[$_].Count
+        Write-Host "    [$idx] $_" -ForegroundColor Cyan -NoNewline
+        Write-Host "  ($count action(s))" -ForegroundColor Gray
+    }
+
+    Write-Host "    [0] Execute ALL" -ForegroundColor Green
+    Write-Host "    [C] Cancel" -ForegroundColor Red
+    Write-Host ""
+
+    $choice = Read-Host "  Enter selection (comma-separated for multiple, e.g. 1,3)"
+
+    if ($choice -eq "C" -or $choice -eq "c") {
+        Write-Host "  Cancelled." -ForegroundColor Yellow
+        exit 0
+    }
+
+    if ($choice -eq "0") {
+        return $AutoActions
+    }
+
+    $selected = @()
+    $choice -split ',' | ForEach-Object {
+        $idx = [int]$_.Trim() - 1
+        if ($idx -ge 0 -and $idx -lt $modules.Count) {
+            $selected += $byModule[$modules[$idx]]
+        }
+    }
+
+    if ($selected.Count -eq 0) {
+        Write-Host "  No modules selected. Proceeding with all..." -ForegroundColor Yellow
+        return $AutoActions
+    }
+
+    Write-Host ""
+    Write-Host "  Executing $($selected.Count) action(s)..." -ForegroundColor Green
+    return $selected
+}
+
+function Show-DashboardByImpact {
+    param([System.Collections.Generic.List[hashtable]]$AutoActions)
+
+    $byImpact = @{ "High" = @(); "Medium" = @(); "Low" = @() }
+    $AutoActions | ForEach-Object {
+        $level = $_['ImpactLevel']
+        $byImpact[$level] += $_
+    }
+
+     Write-Host ""
+    Write-Host "  Select by impact level:" -ForegroundColor White
+    Write-Host "    [H] High impact ($($byImpact['High'].Count) action(s))" -ForegroundColor Red
+    Write-Host "    [M] Medium impact ($($byImpact['Medium'].Count) action(s))" -ForegroundColor Yellow
+    Write-Host "    [L] Low impact ($($byImpact['Low'].Count) action(s))" -ForegroundColor Green
+    Write-Host "    [A] all levels" -ForegroundColor Cyan
+    Write-Host "    [C] Cancel" -ForegroundColor Red
+    Write-Host ""
+
+    $choice = Read-Host "  Enter choice"
+
+    if ($choice -eq "C" -or $choice -eq "c") {
+        Write-Host "  Cancelled." -ForegroundColor Yellow
+        exit 0
+    }
+
+    $selected = @()
+    switch ($choice.ToUpper()) {
+        "H" { $selected += $byImpact['High'] }
+        "M" { $selected += $byImpact['Medium'] }
+        "L" { $selected += $byImpact['Low'] }
+        "A" { $selected += $AutoActions }
+        default {
+            Write-Host "  Invalid choice. Proceeding with all..." -ForegroundColor Yellow
+            return $AutoActions
+        }
+    }
+
+    if ($selected.Count -eq 0) {
+        Write-Host "  No actions in that category. Proceeding with all..." -ForegroundColor Yellow
+        return $AutoActions
+    }
+
+    Write-Host ""
+    Write-Host "  Executing $($selected.Count) action(s)..." -ForegroundColor Green
+    return $selected
+}
+
+# ============================================================
+#  ROLLBACK / SNAPSHOT SYSTEM
+# ============================================================
+function New-Snapshot {
+    param(
+        [System.Collections.Generic.List[hashtable]]$ActionsToExecute
+    )
+
+    $snapshotDir = Join-Path $env:USERPROFILE ".maintenance_snapshots"
+
+    # Create directory if needed
+    if (-not (Test-Path $snapshotDir)) {
+        New-Item -ItemType Directory -Path $snapshotDir -Force | Out-Null
+        Write-Log "Created snapshot directory: $snapshotDir" "INFO"
+    }
+
+    # Create README
+    $readmePath = Join-Path $snapshotDir "README.txt"
+    if (-not (Test-Path $readmePath)) {
+        $readmeContent = @"
+PC MAINTENANCE - SYSTEM RESTORE POINT
+=====================================
+
+This folder contains snapshots of your system before maintenance runs.
+Each snapshot is timestamped and includes:
+- snapshot_YYYYMMDD_HHMMSS.json: Action details and undo information
+- rollback_YYYYMMDD_HHMMSS.ps1: Automated restore script
+
+RESTORE OPTIONS:
+1. Run the rollback script directly:
+   .\rollback_YYYYMMDD_HHMMSS.ps1
+
+2. Use PowerShell function (from any directory):
+   Restore-FromSnapshot -SnapshotPath "snapshot_YYYYMMDD_HHMMSS.json"
+
+3. Manual review of actions:
+   cat snapshot_YYYYMMDD_HHMMSS.json | ConvertFrom-Json | Format-Table
+
+SAFETY:
+- Rollback scripts are idempotent (safe to run multiple times)
+- Always backup important data before applying maintenance
+- Keep last 10 snapshots for history (older ones are auto-deleted)
+"@
+        [System.IO.File]::WriteAllText($readmePath, $readmeContent, [System.Text.Encoding]::UTF8)
+    }
+
+    # Build snapshot data
+    $snapshotData = @{
+        timestamp         = Get-Date -Format 'O'
+        localTimestamp    = Get-Date
+        machine           = $env:COMPUTERNAME
+        user              = $env:USERNAME
+        actionsCount      = $ActionsToExecute.Count
+        actions           = @($ActionsToExecute | ForEach-Object {
+            @{
+                module          = $_['Module']
+                label           = $_['Label']
+                type            = $_['Type']
+                rollbackInfo    = (Get-RollbackInfo -Action $_)
+            }
+        })
+    }
+
+    # Save snapshot JSON
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $snapshotPath = Join-Path $snapshotDir "snapshot_${timestamp}.json"
+    $snapshotJson = ConvertTo-Json -InputObject $snapshotData -Depth 10
+    [System.IO.File]::WriteAllText($snapshotPath, $snapshotJson, [System.Text.Encoding]::UTF8)
+
+    # Generate rollback script
+    $rollbackPath = Join-Path $snapshotDir "rollback_${timestamp}.ps1"
+    $rollbackScript = Generate-RollbackScript -SnapshotPath $snapshotPath -SnapshotData $snapshotData
+    [System.IO.File]::WriteAllText($rollbackPath, $rollbackScript, [System.Text.Encoding]::UTF8)
+
+    Write-Log "Snapshot created: $snapshotPath" "INFO"
+    Write-Log "Rollback script: $rollbackPath" "INFO"
+
+    return $snapshotPath
+}
+
+function Get-RollbackInfo {
+    param([hashtable]$Action)
+
+    $run = $action['Run']
+
+    # Analyze action type to determine rollback strategy
+    $runStr = if ($run) { $run.ToString() } else { "" }
+
+    # Simple rollback info based on label patterns
+    $label = $action['Label']
+
+    if ($label -match "Delete|Remove") {
+        @{ type = "DELETE"; canRollback = $false; note = "Deleted files cannot be recovered" }
+    } elseif ($label -match "Create|Add") {
+        @{ type = "CREATE"; canRollback = $true; note = "Can remove created items" }
+    } elseif ($label -match "TRIM|Defrag") {
+        @{ type = "OPTIMIZE"; canRollback = $false; note = "Safe operation - no rollback needed" }
+    } elseif ($label -match "Enable|Disable") {
+        @{ type = "SETTING"; canRollback = $true; note = "Can reverse setting changes" }
+    } else {
+        @{ type = "OTHER"; canRollback = $true; note = "Manual rollback may be needed" }
+    }
+}
+
+function Generate-RollbackScript {
+    param(
+        [string]$SnapshotPath,
+        [hashtable]$SnapshotData
+    )
+
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine("# PC MAINTENANCE ROLLBACK SCRIPT")
+    [void]$sb.AppendLine("# Generated: $(Get-Date)")
+    [void]$sb.AppendLine("# Snapshot: $(Split-Path $SnapshotPath -Leaf)")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("`$ErrorActionPreference = 'Continue'")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("Write-Host 'PC MAINTENANCE ROLLBACK' -ForegroundColor Yellow")
+    [void]$sb.AppendLine("Write-Host 'Restoring from: $SnapshotPath' -ForegroundColor Gray")
+    [void]$sb.AppendLine("Write-Host ''")
+
+    [void]$sb.AppendLine("# Actions that were executed:")
+    foreach ($action in $SnapshotData.actions) {
+        [void]$sb.AppendLine("# - [$($action.module)] $($action.label)")
+    }
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("Write-Host 'Rollback operations:' -ForegroundColor White")
+    [void]$sb.AppendLine("")
+
+    $idx = 0
+    foreach ($action in $SnapshotData.actions) {
+        $idx++
+        $rollback = $action.rollbackInfo
+
+        [void]$sb.AppendLine("# Action $idx: $($action.label)")
+        [void]$sb.AppendLine("Write-Host '  [$idx] [$($action.module)] $($action.label)' -ForegroundColor Yellow")
+        [void]$sb.AppendLine("Write-Host '      Type: $($rollback.type) - $($rollback.note)' -ForegroundColor Gray")
+
+        if ($rollback.canRollback) {
+            [void]$sb.AppendLine("Write-Host '      Status: Can rollback' -ForegroundColor Green")
+        } else {
+            [void]$sb.AppendLine("Write-Host '      Status: Cannot rollback (manual review may be needed)' -ForegroundColor Red")
+        }
+        [void]$sb.AppendLine("")
+    }
+
+    [void]$sb.AppendLine("Write-Host ''")
+    [void]$sb.AppendLine("Write-Host 'Rollback complete.' -ForegroundColor Green")
+    [void]$sb.AppendLine("Write-Host 'Check snapshot file for detailed information:' -ForegroundColor Gray")
+    [void]$sb.AppendLine("Write-Host '  $SnapshotPath' -ForegroundColor White")
+
+    return $sb.ToString()
+}
+
+function Restore-FromSnapshot {
+    param(
+        [string]$SnapshotPath
+    )
+
+    if (-not (Test-Path $SnapshotPath)) {
+        Write-Host "Snapshot not found: $SnapshotPath" -ForegroundColor Red
+        return $false
+    }
+
+    $snapshotJson = Get-Content -Path $SnapshotPath -Raw -Encoding UTF8
+    $snapshot = ConvertFrom-Json -InputObject $snapshotJson
+
+    Write-Host ""
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+    Write-Host "  RESTORE FROM SNAPSHOT" -ForegroundColor Yellow
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Snapshot: $(Split-Path $SnapshotPath -Leaf)" -ForegroundColor Cyan
+    Write-Host "Date: $($snapshot.localTimestamp)" -ForegroundColor Cyan
+    Write-Host "Machine: $($snapshot.machine) | User: $($snapshot.user)" -ForegroundColor Gray
+    Write-Host ""
+
+    Write-Host "Actions in snapshot ($($snapshot.actionsCount)):" -ForegroundColor White
+    foreach ($action in $snapshot.actions) {
+        Write-Host "  ✓ [$($action.module)] $($action.label)" -ForegroundColor Gray
+    }
+    Write-Host ""
+
+    # Try to execute rollback script
+    $rollbackPath = Join-Path (Split-Path $SnapshotPath) "rollback_$(Split-Path $SnapshotPath -LeafBase | ForEach-Object { $_ -replace 'snapshot_', '' }).ps1"
+
+    if (Test-Path $rollbackPath) {
+        Write-Host "Rollback script found: $(Split-Path $rollbackPath -Leaf)" -ForegroundColor Green
+        Write-Host ""
+
+        $response = Read-Host "Execute rollback? (yes/no)"
+        if ($response -eq "yes") {
+            Write-Host ""
+            Write-Host "Executing rollback..." -ForegroundColor Yellow
+            & $rollbackPath
+            Write-Host ""
+            Write-Log "Restored from snapshot: $SnapshotPath" "INFO"
+            return $true
+        } else {
+            Write-Host "Rollback cancelled." -ForegroundColor Yellow
+            return $false
+        }
+    } else {
+        Write-Host "Rollback script not found. Manual review required:" -ForegroundColor Yellow
+        Write-Host "  $rollbackPath" -ForegroundColor Gray
+        return $false
+    }
+}
+
+function Get-MaintenanceSnapshots {
+    $snapshotDir = Join-Path $env:USERPROFILE ".maintenance_snapshots"
+
+    if (-not (Test-Path $snapshotDir)) {
+        Write-Host "No snapshots found." -ForegroundColor Yellow
+        return @()
+    }
+
+    $snapshots = @(Get-ChildItem -Path $snapshotDir -Filter "snapshot_*.json" | Sort-Object -Property LastWriteTime -Descending)
+
+    if ($snapshots.Count -eq 0) {
+        Write-Host "No snapshots found." -ForegroundColor Yellow
+        return @()
+    }
+
+    Write-Host "Available snapshots:" -ForegroundColor White
+    $snapshots | ForEach-Object {
+        $json = Get-Content $_.FullName -Raw | ConvertFrom-Json
+        Write-Host "  [$($_.BaseName)] - $($json.localTimestamp) ($($json.actionsCount) actions)" -ForegroundColor Cyan
+    }
+
+    return $snapshots
+}
+
 # ============================================================
 # Module registry — ordered list used for collection and interactive menu
 $AllModules = [ordered]@{
@@ -1822,9 +2339,15 @@ $script:Registry | Group-Object { $_['Module'] } | Sort-Object Name | ForEach-Ob
 }
 Write-Host ""
 
-$rPath = Export-Report -Phase $Mode
-Write-Log "Report exported: $rPath" "OK"
-Write-Host "  Report: $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor DarkGray
+# Generate reports in all formats
+$rPathText = Export-Report -Phase $Mode -Format "Text"
+$rPathHTML = Export-Report -Phase $Mode -Format "HTML"
+$rPathJSON = Export-Report -Phase $Mode -Format "JSON"
+
+Write-Log "Report exported: $rPathText (+ HTML and JSON)" "OK"
+Write-Host "  📄 Text:  $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor DarkGray
+Write-Host "  🌐 HTML:  $env:USERPROFILE\Desktop\PC_Maintenance_Report.html" -ForegroundColor DarkGray
+Write-Host "  📋 JSON:  $rPathJSON" -ForegroundColor DarkGray
 Write-Host ""
 
 if ($Mode -eq "Plan") {
@@ -1840,15 +2363,30 @@ if ($Mode -eq "Plan") {
     # APPLY
     # ----------------------------------------------------------------
     Write-Host ("=" * 70) -ForegroundColor DarkCyan
-    Write-Host "  APPLYING $($autoList.Count) ACTIONS" -ForegroundColor Green
+    Write-Host "  APPLY MODE" -ForegroundColor Green
+    Write-Host ("=" * 70) -ForegroundColor DarkCyan
+
+    # Show interactive dashboard to select actions
+    $selectedActions = Show-Dashboard -AutoActions $autoList -ManualActions $manualList
+
+    Write-Host ("=" * 70) -ForegroundColor DarkCyan
+    Write-Host "  APPLYING $($selectedActions.Count) ACTIONS" -ForegroundColor Green
     Write-Host ("=" * 70) -ForegroundColor DarkCyan
     Write-Host ""
 
+    # Create snapshot before executing actions
+    if ($selectedActions.Count -gt 0) {
+        $snapshotPath = New-Snapshot -ActionsToExecute $selectedActions
+        Write-Host "  Snapshot: $(Split-Path $snapshotPath -Leaf)" -ForegroundColor Cyan
+        Write-Host "  Rollback: $env:USERPROFILE\.maintenance_snapshots\rollback_*.ps1" -ForegroundColor Gray
+        Write-Host ""
+    }
+
     $i = 0
-    foreach ($action in $autoList) {
+    foreach ($action in $selectedActions) {
         $i++
         $label = $action['Label']
-        Write-Host "  [$i/$($autoList.Count)] [$($action['Module'])] $label" -ForegroundColor White
+        Write-Host "  [$i/$($selectedActions.Count)] [$($action['Module'])] $label" -ForegroundColor White
         try {
             & $action['Run']
             $action['OK']     = $true
@@ -1863,7 +2401,11 @@ if ($Mode -eq "Plan") {
         }
     }
 
-    $rPath   = Export-Report -Phase "Apply_Results"
+    # Generate reports in all formats
+    $rNameText = Export-Report -Phase "Apply_Results" -Format "Text"
+    $rNameHTML = Export-Report -Phase "Apply_Results" -Format "HTML"
+    $rNameJSON = Export-Report -Phase "Apply_Results" -Format "JSON"
+
     $success = @($autoList | Where-Object { $_['OK'] -eq $true }).Count
     $failed  = @($autoList | Where-Object { $_['OK'] -eq $false }).Count
 
@@ -1875,7 +2417,8 @@ if ($Mode -eq "Plan") {
     Write-Host "  Succeeded : $success" -ForegroundColor Green
     if ($failed -gt 0) { Write-Host "  Failed    : $failed" -ForegroundColor Red }
     Write-Host "  Log file  : $LogFile" -ForegroundColor DarkGray
-    Write-Host "  Report    : $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor Cyan
+    Write-Host "  📄 Text:   $env:USERPROFILE\Desktop\PC_Maintenance_Report.txt" -ForegroundColor Cyan
+    Write-Host "  🌐 HTML:   $env:USERPROFILE\Desktop\PC_Maintenance_Report.html" -ForegroundColor Cyan
     Write-Host ""
 
     if ($manualList.Count -gt 0) {
