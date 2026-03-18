@@ -12,10 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Pester test suite**: comprehensive tests for syntax validation, function availability, and configuration checking
 - **Report rotation**: old reports (older than 30 days) are now automatically deleted, just like logs
+- **Advanced File Analysis module**: security-focused risk assessment for Desktop and Downloads
+  * Zone.Identifier detection: flags all internet-downloaded files
+  * Multi-layer risk scoring (0-100): extension, zone, signatures, code patterns, vendor trust, age
+  * Automatic quarantine for CRITICAL-risk files (≥70 score)
+  * Manual review recommendations for HIGH-risk files (45-69 score)
+  * Personal quarantine vault (~\.suspicious_quarantine) with JSON audit log and recovery tools
+  * Detects: unsigned executables, PowerShell obfuscation, suspicious download patterns
+
+### Fixed
+- **Documents module empty folder deletion bug**: Fixed null reference error caused by variable overwrites in closures
+  * Accumulates empty folders by directory before registration
+  * Uses proper parameter binding (.Bind) for scriptblock closures
 
 ### Improved
-- README now documents the `tests/` directory structure
+- README now includes Advanced File Analysis module in table
 - Better CI/CD integration with working Pester tests in `test.yml`
+- More comprehensive security risk assessment pipeline
 
 ---
 

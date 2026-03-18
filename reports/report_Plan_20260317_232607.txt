@@ -1,0 +1,26 @@
+PC MAINTENANCE REPORT - Plan
+Generated : 03/17/2026 23:26:21
+Machine   : DIEGOPC  |  User: diego
+============================================================
+
+SUMMARY
+  Mode               : Plan
+  Auto actions       : 15
+  Manual items       : 6
+  Space freed/saved  : 0 B
+
+
+============================================================
+MANUAL ACTIONS REQUIRED
+  [!] [Security] Install update: Actualizaci?n de inteligencia de seguridad para Microsoft Defender Antivirus - KB2267602 (versi?n 1.445.595.0) - Canal actual (ampliado)
+      Run Windows Update to install
+  [!] [Files] Organize Desktop (74 items)
+      Move loose files to Documents or sub-folders. Ideal: shortcuts only.
+  [!] [Files] Review 3 large file(s) in Downloads
+      Files above 500 MB - delete installers/ISOs you no longer need
+  [!] [Disk] Low disk space on drive D
+      Only 9.9 GB free (threshold: 15 GB) - clean up large files
+  [!] [Disk] Defragment HDD E:
+      Run: Optimize-Volume -DriveLetter E -Defrag
+  [!] [Backup] Verify off-site or cloud backup strategy
+      External drive, OneDrive, Google Drive, etc.

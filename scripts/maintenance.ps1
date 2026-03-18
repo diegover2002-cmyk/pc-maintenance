@@ -1558,6 +1558,130 @@ function Collect-ProcessActions {
 }
 
 # ============================================================
+#  MODULE: ADVANCED FILE ANALYSIS (Security Risk Assessment)
+# ============================================================
+function Collect-AdvancedFileAnalysisActions {
+    Show-Section "ADVANCED FILE ANALYSIS (SECURITY RISK)"
+
+    $scanDirs = @(
+        @{ P = "$env:USERPROFILE\Desktop"; L = "Desktop" }
+        @{ P = "$env:USERPROFILE\Downloads"; L = "Downloads" }
+    )
+
+    $internetFiles = @()
+    $criticalRiskFiles = @()
+    $highRiskFiles = @()
+
+    foreach ($dir in $scanDirs) {
+        if (-not (Test-Path $dir.P)) { continue }
+
+        Write-PlanLine "$($dir.L): scanning for internet-downloaded files..." "INFO"
+        $files = @(Get-ChildItem $dir.P -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 0 })
+
+        if ($files.Count -eq 0) {
+            Write-PlanLine "  No files found" "KEEP"
+            continue
+        }
+
+        # --- Tier 1: Zone.Identifier detection (fast) ---
+        foreach ($file in $files) {
+            $zone = Get-ZoneIdentifierSafe $file.FullName
+
+            if ($zone.IsInternet) {
+                $internetFiles += @{
+                    File = $file
+                    Zone = $zone
+                    Dir = $dir.L
+                }
+            }
+        }
+
+        # --- Tier 2: Risk scoring on suspicious candidates (slower) ---
+        # Only analyze if file is: executable, script, or large + internet-downloaded
+        $candidates = @($files | Where-Object {
+            $ext = $_.Extension.ToLower()
+            $isExe = $ext -in @(".exe", ".msi", ".bat", ".cmd", ".ps1", ".vbs", ".scr", ".com")
+            $isLarge = $_.Length -gt 50MB
+            $zone = (Get-ZoneIdentifierSafe $_.FullName).Zone
+
+            $isExe -or ($isLarge -and $zone -eq 3)
+        })
+
+        foreach ($candidate in $candidates) {
+            $meta = Get-FileRiskMetadata $candidate.FullName
+            $risk = Calculate-RiskScore $meta
+
+            if ($risk.Level -eq "CRITICAL") {
+                $criticalRiskFiles += @{
+                    File = $candidate
+                    Risk = $risk
+                    Metadata = $meta
+                    Dir = $dir.L
+                }
+            }
+            elseif ($risk.Level -eq "HIGH") {
+                $highRiskFiles += @{
+                    File = $candidate
+                    Risk = $risk
+                    Metadata = $meta
+                    Dir = $dir.L
+                }
+            }
+        }
+    }
+
+    # --- Report: Internet-downloaded files ---
+    $inetCount = @($internetFiles | Where-Object { $_.Zone.Zone -eq 3 }).Count
+    if ($inetCount -gt 0) {
+        Write-PlanLine "Found $inetCount file(s) from internet (Zone 3):" "INFO"
+        @($internetFiles | Where-Object { $_.Zone.Zone -eq 3 } | Select-Object -First 5) | ForEach-Object {
+            Write-PlanLine "  $($_.Dir)\$($_.File.Name) ($(Format-Bytes $_.File.Length))" "INFO"
+        }
+        if ($inetCount -gt 5) { Write-PlanLine "  ... and $($inetCount - 5) more" "INFO" }
+    }
+
+    # --- Report: Critical risk files (auto-quarantine) ---
+    if ($criticalRiskFiles.Count -gt 0) {
+        Write-PlanLine "$($criticalRiskFiles.Count) CRITICAL RISK file(s) detected - will quarantine:" "WARN"
+        foreach ($item in $criticalRiskFiles | Select-Object -First 3) {
+            Write-PlanLine "  [$($item.Risk.Score)/100] $($item.File.Name) ($($item.Dir))" "WARN"
+            $item.Risk.Reasons | ForEach-Object { Write-PlanLine "    • $_" "INFO" }
+        }
+        if ($criticalRiskFiles.Count -gt 3) { Write-PlanLine "  ... and $($criticalRiskFiles.Count - 3) more" "INFO" }
+
+        # Register quarantine action
+        $criticalList = $criticalRiskFiles
+        Register-Action "Security" "AUTO" "Quarantine $($criticalRiskFiles.Count) CRITICAL risk file(s)" `
+            -Detail "Files will be moved to ~/.suspicious_quarantine for manual review" `
+            -Run (
+                {
+                    param($files)
+                    foreach ($item in $files) {
+                        Move-SuspiciousFile -FilePath $item.File.FullName -Reason "$($item.Risk.Score)/100 CRITICAL: $($item.Risk.Reasons -join '; ')"
+                    }
+                }.Bind($null, $criticalList)
+            )
+    }
+
+    # --- Report: High risk files (manual review) ---
+    if ($highRiskFiles.Count -gt 0) {
+        Write-PlanLine "$($highRiskFiles.Count) HIGH RISK file(s) - review recommended:" "WARN"
+        foreach ($item in $highRiskFiles | Select-Object -First 3) {
+            Write-PlanLine "  [$($item.Risk.Score)/100] $($item.File.Name) ($($item.Dir))" "WARN"
+            $item.Risk.Reasons | ForEach-Object { Write-PlanLine "    • $_" "INFO" }
+        }
+        if ($highRiskFiles.Count -gt 3) { Write-PlanLine "  ... and $($highRiskFiles.Count - 3) more" "INFO" }
+
+        Register-Action "Security" "MANUAL" "Review $($highRiskFiles.Count) HIGH risk file(s)" `
+            -Detail "Check quarantine_log.jsonl in ~/.suspicious_quarantine for details; manually move suspicious files"
+    }
+
+    if ($criticalRiskFiles.Count -eq 0 -and $highRiskFiles.Count -eq 0) {
+        Write-PlanLine "No critical or high-risk files detected" "KEEP"
+    }
+}
+
+# ============================================================
 #  REPORT GENERATOR
 # ============================================================
 function Export-Report([string]$Phase) {
@@ -1614,17 +1738,18 @@ function Export-Report([string]$Phase) {
 # ============================================================
 # Module registry — ordered list used for collection and interactive menu
 $AllModules = [ordered]@{
-    "Security"    = { Collect-SecurityActions    }
-    "Cleanup"     = { Collect-CleanupActions     }
-    "Startup"     = { Collect-StartupActions     }
-    "FileAnalysis"= { Collect-FileAnalysisActions}
-    "Disk"        = { Collect-DiskActions        }
-    "Documents"   = { Collect-DocumentsActions   }
-    "Drivers"     = { Collect-DriversActions     }
-    "Backup"      = { Collect-BackupActions      }
-    "Network"     = { Collect-NetworkActions     }
-    "Temperature" = { Collect-TemperatureActions }
-    "Processes"   = { Collect-ProcessActions     }
+    "Security"             = { Collect-SecurityActions             }
+    "Cleanup"              = { Collect-CleanupActions              }
+    "Startup"              = { Collect-StartupActions              }
+    "FileAnalysis"         = { Collect-FileAnalysisActions         }
+    "Disk"                 = { Collect-DiskActions                 }
+    "Documents"            = { Collect-DocumentsActions            }
+    "Drivers"              = { Collect-DriversActions              }
+    "Backup"               = { Collect-BackupActions               }
+    "Network"              = { Collect-NetworkActions              }
+    "Temperature"          = { Collect-TemperatureActions          }
+    "Processes"            = { Collect-ProcessActions              }
+    "AdvancedFileAnalysis" = { Collect-AdvancedFileAnalysisActions }
 }
 $selectedModules = [string[]]$AllModules.Keys
 

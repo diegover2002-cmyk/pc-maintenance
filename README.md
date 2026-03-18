@@ -20,6 +20,7 @@ run once to see *exactly* what would change, then run again to apply it.
 | 9 | **Network** | Active adapters with IP/DNS info, connectivity check (Google/Cloudflare/Quad9), latency warning |
 | 10 | **Temperature** | CPU thermal zones via ACPI, warns at 75 °C and 90 °C |
 | 11 | **Processes** | Top 5 processes by CPU and RAM, flags processes using more than 2 GB |
+| 12 | **Advanced File Analysis** | Detects internet-downloaded files (Zone.Identifier), calculates risk scores (0-100), auto-quarantines CRITICAL files |
 
 All actions are classified as `AUTO` (safe to apply automatically) or `MANUAL` (requires human decision).
 

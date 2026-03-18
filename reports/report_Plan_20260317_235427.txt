@@ -1,0 +1,110 @@
+﻿PC MAINTENANCE REPORT - Plan
+Generated : 03/17/2026 23:55:40
+Machine   : DIEGOPC  |  User: diego
+============================================================
+
+SUMMARY
+  Mode               : Plan
+  Auto actions       : 18
+  Manual items       : 13
+  Space freed/saved  : 7,0 GB
+
+============================================================
+BACKUP
+  [?] Verify off-site or cloud backup strategy
+      External drive, OneDrive, Google Drive, etc.
+============================================================
+CLEANUP
+  [+] Clean User Temp
+      1 files
+  [+] Clear Chrome cache
+      389,5 MB
+  [+] Clear Edge cache
+      14,5 MB
+============================================================
+DISK
+  [?] Low disk space on drive D
+      Only 9.9 GB free (threshold: 15 GB) - clean up large files
+  [+] TRIM SSD C:
+  [?] Defragment HDD E:
+      Run: Optimize-Volume -DriveLetter E -Defrag
+  [+] TRIM SSD D:
+============================================================
+DOCUMENTS
+  [?] Review executables in Documents
+      12 .exe/.msi/.bat files - move to a dedicated folder or delete installers
+  [+] Delete 426 empty folder(s) in Documents
+  [?] Review executables in Desktop
+      22 .exe/.msi/.bat files - move to a dedicated folder or delete installers
+  [+] Delete 16 empty folder(s) in Desktop
+  [?] Review executables in Downloads
+      66 .exe/.msi/.bat files - move to a dedicated folder or delete installers
+  [+] Delete 28 empty folder(s) in Downloads
+  [+] Delete 1 empty folder(s) in Videos
+  [?] Secure 60 sensitive-named file(s)
+      Files with names like 'password', 'clave', 'token', etc. - move to encrypted vault (KeePass, BitLocker) or delete if no longer needed
+  [?] Review 19 large old file(s) (4,0 GB)
+      Files over 100 MB not modified in 6+ months - archive to external drive or delete
+  [?] Organize Desktop (52 loose files)
+      Move documents/images/archives to their proper folders. Desktop should contain shortcuts only.
+============================================================
+FILES
+  [?] Organize Desktop (75 items)
+      Move loose files to Documents or sub-folders. Ideal: shortcuts only.
+  [+] Delete old Downloads (>60 days)
+      164 files
+  [?] Review 3 large file(s) in Downloads
+      Files above 500 MB - delete installers/ISOs you no longer need
+  [?] Delete 24 duplicate file(s)
+      Keeping newest copy of each - review list before deleting manually
+============================================================
+SECURITY
+  [?] Install update: Actualizaci?n de inteligencia de seguridad para Microsoft Defender Antivirus - KB2267602 (versi?n 1.445.595.0) - Canal actual (ampliado)
+      Run Windows Update to install
+============================================================
+STARTUP
+  [+] Disable startup: Steam [Gaming]
+      "C:\Program Files (x86)\Steam\steam.exe" -silent
+  [+] Disable startup: Discord [Gaming]
+      "C:\Users\diego\AppData\Local\Discord\Update.exe" --processS...
+  [+] Disable startup: com.blitz.app [Gaming]
+      "C:\Users\diego\AppData\Local\Programs\Blitz\Blitz.exe" --au...
+  [+] Disable startup: AceStream [Media]
+      C:\Users\diego\AppData\Roaming\ACEStream\engine\ace_engine.e...
+  [+] Disable startup: electron.app.Yprac [Gaming]
+      C:\Users\diego\AppData\Local\Programs\Yprac\Yprac.exe
+  [+] Disable startup: Trading Paints [Gaming]
+      C:\Program Files (x86)\Rhinode LLC\Trading Paints\Trading Pa...
+  [+] Disable startup: MicrosoftEdgeAutoLaunch_7468C28B0B2B1BB91765C621F18F928B [Auto]
+      "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.ex...
+  [+] Disable startup: Discord [Gaming]
+      C:\ProgramData\SquirrelMachineInstalls\Discord.exe --checkIn...
+
+============================================================
+MANUAL ACTIONS REQUIRED
+  [!] [Security] Install update: Actualizaci?n de inteligencia de seguridad para Microsoft Defender Antivirus - KB2267602 (versi?n 1.445.595.0) - Canal actual (ampliado)
+      Run Windows Update to install
+  [!] [Files] Organize Desktop (75 items)
+      Move loose files to Documents or sub-folders. Ideal: shortcuts only.
+  [!] [Files] Review 3 large file(s) in Downloads
+      Files above 500 MB - delete installers/ISOs you no longer need
+  [!] [Files] Delete 24 duplicate file(s)
+      Keeping newest copy of each - review list before deleting manually
+  [!] [Disk] Low disk space on drive D
+      Only 9.9 GB free (threshold: 15 GB) - clean up large files
+  [!] [Disk] Defragment HDD E:
+      Run: Optimize-Volume -DriveLetter E -Defrag
+  [!] [Documents] Review executables in Documents
+      12 .exe/.msi/.bat files - move to a dedicated folder or delete installers
+  [!] [Documents] Review executables in Desktop
+      22 .exe/.msi/.bat files - move to a dedicated folder or delete installers
+  [!] [Documents] Review executables in Downloads
+      66 .exe/.msi/.bat files - move to a dedicated folder or delete installers
+  [!] [Documents] Secure 60 sensitive-named file(s)
+      Files with names like 'password', 'clave', 'token', etc. - move to encrypted vault (KeePass, BitLocker) or delete if no longer needed
+  [!] [Documents] Review 19 large old file(s) (4,0 GB)
+      Files over 100 MB not modified in 6+ months - archive to external drive or delete
+  [!] [Documents] Organize Desktop (52 loose files)
+      Move documents/images/archives to their proper folders. Desktop should contain shortcuts only.
+  [!] [Backup] Verify off-site or cloud backup strategy
+      External drive, OneDrive, Google Drive, etc.

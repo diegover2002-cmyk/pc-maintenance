@@ -1,0 +1,78 @@
+PC MAINTENANCE REPORT - Plan
+Generated : 03/17/2026 23:28:53
+Machine   : DIEGOPC  |  User: diego
+============================================================
+
+SUMMARY
+  Mode               : Plan
+  Auto actions       : 15
+  Manual items       : 6
+  Space freed/saved  : 7,4 GB
+
+============================================================
+BACKUP
+  [?] Verify off-site or cloud backup strategy
+      External drive, OneDrive, Google Drive, etc.
+============================================================
+CLEANUP
+  [+] Clean User Temp
+      1 files
+  [+] Clear Chrome cache
+      391,8 MB
+  [+] Clear Edge cache
+      14,5 MB
+============================================================
+DISK
+  [?] Low disk space on drive D
+      Only 9.9 GB free (threshold: 15 GB) - clean up large files
+  [+] TRIM SSD C:
+  [?] Defragment HDD E:
+      Run: Optimize-Volume -DriveLetter E -Defrag
+  [+] TRIM SSD D:
+============================================================
+FILES
+  [?] Organize Desktop (75 items)
+      Move loose files to Documents or sub-folders. Ideal: shortcuts only.
+  [+] Delete old Downloads (>60 days)
+      164 files
+  [?] Review 3 large file(s) in Downloads
+      Files above 500 MB - delete installers/ISOs you no longer need
+  [+] Delete 24 duplicate file(s)
+      Keeping newest copy of each
+============================================================
+SECURITY
+  [?] Install update: Actualizaci?n de inteligencia de seguridad para Microsoft Defender Antivirus - KB2267602 (versi?n 1.445.595.0) - Canal actual (ampliado)
+      Run Windows Update to install
+============================================================
+STARTUP
+  [+] Disable startup: Steam [Gaming]
+      "C:\Program Files (x86)\Steam\steam.exe" -silent
+  [+] Disable startup: Discord [Gaming]
+      "C:\Users\diego\AppData\Local\Discord\Update.exe" --processS...
+  [+] Disable startup: com.blitz.app [Gaming]
+      "C:\Users\diego\AppData\Local\Programs\Blitz\Blitz.exe" --au...
+  [+] Disable startup: AceStream [Media]
+      C:\Users\diego\AppData\Roaming\ACEStream\engine\ace_engine.e...
+  [+] Disable startup: electron.app.Yprac [Gaming]
+      C:\Users\diego\AppData\Local\Programs\Yprac\Yprac.exe
+  [+] Disable startup: Trading Paints [Gaming]
+      C:\Program Files (x86)\Rhinode LLC\Trading Paints\Trading Pa...
+  [+] Disable startup: MicrosoftEdgeAutoLaunch_7468C28B0B2B1BB91765C621F18F928B [Auto]
+      "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.ex...
+  [+] Disable startup: Discord [Gaming]
+      C:\ProgramData\SquirrelMachineInstalls\Discord.exe --checkIn...
+
+============================================================
+MANUAL ACTIONS REQUIRED
+  [!] [Security] Install update: Actualizaci?n de inteligencia de seguridad para Microsoft Defender Antivirus - KB2267602 (versi?n 1.445.595.0) - Canal actual (ampliado)
+      Run Windows Update to install
+  [!] [Files] Organize Desktop (75 items)
+      Move loose files to Documents or sub-folders. Ideal: shortcuts only.
+  [!] [Files] Review 3 large file(s) in Downloads
+      Files above 500 MB - delete installers/ISOs you no longer need
+  [!] [Disk] Low disk space on drive D
+      Only 9.9 GB free (threshold: 15 GB) - clean up large files
+  [!] [Disk] Defragment HDD E:
+      Run: Optimize-Volume -DriveLetter E -Defrag
+  [!] [Backup] Verify off-site or cloud backup strategy
+      External drive, OneDrive, Google Drive, etc.
